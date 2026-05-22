@@ -158,7 +158,6 @@ class ClickUpAPI:
             "color": color,
             "features": {
                 "due_dates": {"enabled": True, "start_date": True},
-                "custom_fields": {"enabled": True},
                 "time_tracking": {"enabled": False},
                 "sprints": {"enabled": False},
             }
