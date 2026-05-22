@@ -114,6 +114,88 @@ class ClickUpAPI:
     def put(self, path: str, body: dict) -> dict:
         return self._request("PUT", path, body)
 
+    # --- Idempotency lookups ---
+    #
+    # Every lookup short-circuits to None when dry_run is True so the caller
+    # falls through to its create path (which will be simulated by _request).
+    # That keeps the dry-run preview honest — it shows every create the user
+    # would attempt on a clean workspace, instead of silently "finding"
+    # synthetic ids and skipping creates entirely.
+
+    def get_space_by_name(self, workspace_id: str, name: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        data = self.get(f"/team/{workspace_id}/space")
+        target = name.lower()
+        for sp in data.get("spaces", []) or []:
+            if (sp.get("name") or "").lower() == target:
+                return sp.get("id")
+        return None
+
+    def get_folder_by_name(self, space_id: str, name: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        data = self.get(f"/space/{space_id}/folder")
+        target = name.lower()
+        for f in data.get("folders", []) or []:
+            if (f.get("name") or "").lower() == target:
+                return f.get("id")
+        return None
+
+    def get_list_by_name_in_space(self, space_id: str, name: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        data = self.get(f"/space/{space_id}/list")
+        target = name.lower()
+        for lst in data.get("lists", []) or []:
+            if (lst.get("name") or "").lower() == target:
+                return lst.get("id")
+        return None
+
+    def get_list_by_name_in_folder(self, folder_id: str, name: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        data = self.get(f"/folder/{folder_id}/list")
+        target = name.lower()
+        for lst in data.get("lists", []) or []:
+            if (lst.get("name") or "").lower() == target:
+                return lst.get("id")
+        return None
+
+    def get_field_by_name(self, list_id: str, name: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        data = self.get(f"/list/{list_id}/field")
+        target = name.lower()
+        for fld in data.get("fields", []) or []:
+            if (fld.get("name") or "").lower() == target:
+                return fld.get("id")
+        return None
+
+    def get_view_by_type(self, entity_type: str, entity_id: str, view_type: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        data = self.get(f"/{entity_type}/{entity_id}/view")
+        target = (view_type or "").lower()
+        for v in data.get("views", []) or []:
+            if (v.get("type") or "").lower() == target:
+                return v.get("id")
+        return None
+
+    def get_task_by_name(self, list_id: str, name: str) -> Optional[str]:
+        if self.dry_run:
+            return None
+        # ClickUp paginates tasks; for setup-time idempotency the seed list is
+        # small (single-digit tasks), so the first page is sufficient. If the
+        # list grows beyond a page, the duplicate check will degrade to "create
+        # again" — acceptable because seasonal task names are unique by design.
+        data = self.get(f"/list/{list_id}/task")
+        target = name.lower()
+        for t in data.get("tasks", []) or []:
+            if (t.get("name") or "").lower() == target:
+                return t.get("id")
+        return None
+
     # --- Higher-level helpers ---
 
     def get_workspace_id(self, workspace_name: Optional[str] = None) -> str:
@@ -150,6 +232,10 @@ class ClickUpAPI:
         return teams[0]["id"]
 
     def create_space(self, workspace_id: str, name: str, color: str) -> str:
+        existing = self.get_space_by_name(workspace_id, name)
+        if existing:
+            print(f"          → {name} already exists  ({existing})")
+            return existing
         data = self.post(f"/team/{workspace_id}/space", {
             "name": name,
             "color": color,
@@ -165,15 +251,31 @@ class ClickUpAPI:
         self.put(f"/space/{space_id}", {"features": {"custom_fields": {"enabled": True}}})
 
     def create_folder(self, space_id: str, name: str) -> str:
+        existing = self.get_folder_by_name(space_id, name)
+        if existing:
+            print(f"          → {name} already exists  ({existing})")
+            return existing
         return self.post(f"/space/{space_id}/folder", {"name": name}).get("id", "")
 
     def create_list_in_space(self, space_id: str, name: str) -> str:
+        existing = self.get_list_by_name_in_space(space_id, name)
+        if existing:
+            print(f"          → {name} already exists  ({existing})")
+            return existing
         return self.post(f"/space/{space_id}/list", {"name": name}).get("id", "")
 
     def create_list_in_folder(self, folder_id: str, name: str) -> str:
+        existing = self.get_list_by_name_in_folder(folder_id, name)
+        if existing:
+            print(f"          → {name} already exists  ({existing})")
+            return existing
         return self.post(f"/folder/{folder_id}/list", {"name": name}).get("id", "")
 
     def add_custom_field(self, list_id: str, field: dict) -> Optional[str]:
+        existing = self.get_field_by_name(list_id, field["name"])
+        if existing:
+            print(f"          → {field['name']} already exists  ({existing})")
+            return existing
         payload = {"name": field["name"], "type": field["type"]}
         if "options" in field:
             payload["type_config"] = {
@@ -185,6 +287,12 @@ class ClickUpAPI:
         return None if "err" in data else data.get("id")
 
     def add_view(self, entity_type: str, entity_id: str, view_type: str) -> Optional[str]:
+        existing = self.get_view_by_type(entity_type, entity_id, view_type)
+        if existing:
+            # Views are silent — they're cosmetic on top of lists/folders and
+            # don't carry user data, so a noisy "already exists" line on every
+            # re-run would drown the more important create/skip signal above.
+            return existing
         data = self.post(f"/{entity_type}/{entity_id}/view",
                          {"name": view_type.capitalize(), "type": view_type})
         v = data.get("view", data)
@@ -192,6 +300,10 @@ class ClickUpAPI:
 
     def create_task(self, list_id: str, name: str, description: str = "",
                     parent: Optional[str] = None) -> str:
+        existing = self.get_task_by_name(list_id, name)
+        if existing:
+            print(f"          → {name} already exists  ({existing})")
+            return existing
         body: dict = {"name": name}
         if description:
             body["description"] = description
