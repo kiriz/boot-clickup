@@ -64,6 +64,7 @@ class ClickUpAPI:
         self.api_key = api_key
         self.dry_run = dry_run
         self._call_count = 0
+        self.plan_limited = False  # set True when PAYWALL_004 hit
 
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         self._call_count += 1
@@ -99,12 +100,8 @@ class ClickUpAPI:
             ecode = data.get("ECODE", "")
             msg = data["err"]
             if ecode == "PAYWALL_004":
-                raise ValueError(
-                    f"Plan limit reached: {msg}\n"
-                    "  The Free plan supports 5 spaces. To build all 9 spaces:\n"
-                    "  Upgrade to ClickUp Unlimited ($7/mo) → Settings → Billing\n"
-                    "  Or reduce config.yaml to 5 spaces and set plan: free"
-                )
+                self.plan_limited = True
+                return {}
             print(f"    ERROR: API error for {method} {path}: {msg}")
         return data
 
@@ -224,17 +221,27 @@ def build(api: ClickUpAPI, cfg: dict, workspace_name: Optional[str] = None) -> d
     list_ids: dict[str, dict[str, str]] = {}
     folder_ids: dict[str, dict[str, str]] = {}
 
-    # 2. Spaces
+    # 2. Spaces — priority order so free-plan users get the most important ones
     print("Step 2/6  Creating spaces...")
-    for space_key, space_cfg in cfg["spaces"].items():
+    priority = cfg.get("free_plan_spaces", [])
+    all_keys = list(cfg["spaces"].keys())
+    ordered_keys = priority + [k for k in all_keys if k not in priority]
+
+    for space_key in ordered_keys:
+        space_cfg = cfg["spaces"][space_key]
         sid = api.create_space(workspace_id, space_cfg["name"], space_cfg.get("color", "#87909E"))
+        if api.plan_limited:
+            remaining = [cfg["spaces"][k]["name"] for k in ordered_keys
+                         if k not in space_ids]
+            print(f"\n  ⚠  Free plan space limit reached.")
+            print(f"     Created: {list(space_ids.keys())}")
+            print(f"     Skipped: {remaining}")
+            print(f"     Upgrade to Unlimited → Settings → Billing to get all spaces.")
+            break
         if not sid:
             raise ValueError(
                 f"Failed to create space '{space_cfg['name']}' — API returned no ID.\n"
-                "  Common causes:\n"
-                "    • Rate limiting: try adding a delay between calls\n"
-                "    • The workspace plan may restrict certain space features\n"
-                "    • The API error detail is printed above"
+                "  The API error detail is printed above."
             )
         api.enable_custom_fields(sid)
         space_ids[space_key] = sid

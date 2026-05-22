@@ -16,9 +16,20 @@
 # ============================================================
 
 # ------ WORKSPACE -----------------------------------------------
-# The ClickUp Unlimited plan ($7/mo) supports unlimited spaces.
-# Free plan supports 5 spaces — remove 4 spaces if staying free.
-plan: unlimited   # free | unlimited | business | enterprise
+# ClickUp plans are per workspace, not per account.
+# A new workspace starts on Free (5-space limit) even if you have Unlimited elsewhere.
+# Upgrade: ClickUp → Settings → Billing → Unlimited ($7/mo)
+#
+# FREE PLAN: the script automatically detects the space limit and creates the
+# spaces below in priority order, stopping when the limit is hit.
+# UNLIMITED: all spaces in the `spaces` section are created.
+
+free_plan_spaces:
+  - inbox    # universal capture — most critical
+  - family   # zero-miss kids events
+  - work     # professional work
+  - projects # side projects
+  - personal # catch-all
 
 
 # ------ SPACES --------------------------------------------------
