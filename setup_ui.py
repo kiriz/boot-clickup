@@ -21,10 +21,35 @@ Usage:
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Interceptor binary resolution
+# ---------------------------------------------------------------------------
+
+_INTERCEPTOR_FALLBACK = os.path.expanduser(
+    "~/Projects/tools/ai-dev-tools/interceptor/dist/interceptor"
+)
+
+def _resolve_interceptor() -> str:
+    """Return the interceptor binary path, searching PATH then the known install location."""
+    found = shutil.which("interceptor")
+    if found:
+        return found
+    if os.path.isfile(_INTERCEPTOR_FALLBACK):
+        return _INTERCEPTOR_FALLBACK
+    raise FileNotFoundError(
+        "interceptor binary not found.\n"
+        "  Expected: ~/Projects/tools/ai-dev-tools/interceptor/dist/interceptor\n"
+        "  Or add it to PATH: export PATH=\"$PATH:~/Projects/tools/ai-dev-tools/interceptor/dist\""
+    )
+
+INTERCEPTOR_BIN = None  # resolved in main() after arg parsing
 
 # ---------------------------------------------------------------------------
 # Workspace constants (from ~/.claude/PAI/USER/CLICKUP.yaml)
@@ -65,7 +90,7 @@ DRY_RUN = False
 
 def interceptor(*args, wait_after=800, require_ok=False) -> dict:
     """Run an interceptor command. Returns parsed JSON or empty dict on failure."""
-    cmd = ["interceptor"] + list(args) + ["--json"]
+    cmd = [INTERCEPTOR_BIN] + list(args) + ["--json"]
     if DRY_RUN:
         print(f"    [dry-run] interceptor {' '.join(str(a) for a in args)}")
         return {"status": "ok"}
@@ -99,7 +124,7 @@ def screenshot(label: str) -> None:
         print(f"    [dry-run] screenshot: {label}")
         return
     result = subprocess.run(
-        ["interceptor", "screenshot", "--save"],
+        [INTERCEPTOR_BIN, "screenshot", "--save"],
         capture_output=True, text=True
     )
     path = result.stdout.strip().split("\n")[-1] if result.stdout else "(unknown)"
@@ -395,7 +420,7 @@ STEPS = {
 def check_interceptor() -> bool:
     """Verify interceptor is reachable and Chrome is running."""
     result = subprocess.run(
-        ["interceptor", "status", "--json"],
+        [INTERCEPTOR_BIN, "status", "--json"],
         capture_output=True, text=True, timeout=10
     )
     if result.returncode != 0:
@@ -425,6 +450,13 @@ def main() -> None:
     args = parser.parse_args()
 
     DRY_RUN = args.dry_run
+
+    global INTERCEPTOR_BIN
+    try:
+        INTERCEPTOR_BIN = _resolve_interceptor()
+    except FileNotFoundError as e:
+        print(f"✗ {e}")
+        sys.exit(1)
 
     if DRY_RUN:
         print("DRY RUN — no browser actions will be taken\n")
