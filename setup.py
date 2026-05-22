@@ -118,6 +118,9 @@ class ClickUpAPI:
                 "  • Check the key at: ClickUp → Settings → Apps → API Token\n"
                 "  • Make sure you're using a Personal API Token, not an OAuth token"
             )
+        print("          Available workspaces:")
+        for t in teams:
+            print(f'            • {t["name"]}  ({t["id"]})')
         if workspace_name:
             match = next((t for t in teams if t["name"].lower() == workspace_name.lower()), None)
             if not match:
@@ -126,6 +129,7 @@ class ClickUpAPI:
                     f'Workspace "{workspace_name}" not found.\n'
                     f"  Available workspaces: {names}"
                 )
+            print(f'          → Targeting: {match["name"]}  ({match["id"]})')
             return match["id"]
         if len(teams) > 1:
             names = "\n".join(f'    • {t["name"]}  ({t["id"]})' for t in teams)
@@ -133,6 +137,7 @@ class ClickUpAPI:
                 "Multiple workspaces found — specify one with --workspace:\n"
                 f"{names}"
             )
+        print(f'          → Targeting: {teams[0]["name"]}  ({teams[0]["id"]})')
         return teams[0]["id"]
 
     def create_space(self, workspace_id: str, name: str, color: str) -> str:
