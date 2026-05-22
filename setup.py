@@ -58,7 +58,7 @@ def _minimal_yaml_load(path: str) -> dict:
 
 class ClickUpAPI:
     BASE = "https://api.clickup.com/api/v2"
-    RATE_DELAY = 0.25  # seconds between requests
+    RATE_DELAY = 0.5  # seconds between requests
 
     def __init__(self, api_key: str, dry_run: bool = False):
         self.api_key = api_key
@@ -91,10 +91,13 @@ class ClickUpAPI:
         if not result.stdout.strip():
             return {}
         try:
-            return json.loads(result.stdout)
+            data = json.loads(result.stdout)
         except json.JSONDecodeError:
             print(f"    WARNING: non-JSON response for {method} {path}: {result.stdout[:80]}")
             return {}
+        if "err" in data:
+            print(f"    ERROR: API error for {method} {path}: {data['err']}")
+        return data
 
     def get(self, path: str) -> dict:
         return self._request("GET", path)
@@ -217,6 +220,14 @@ def build(api: ClickUpAPI, cfg: dict, workspace_name: Optional[str] = None) -> d
     print("Step 2/6  Creating spaces...")
     for space_key, space_cfg in cfg["spaces"].items():
         sid = api.create_space(workspace_id, space_cfg["name"], space_cfg.get("color", "#87909E"))
+        if not sid:
+            raise ValueError(
+                f"Failed to create space '{space_cfg['name']}' — API returned no ID.\n"
+                "  Common causes:\n"
+                "    • Rate limiting: try adding a delay between calls\n"
+                "    • The workspace plan may restrict certain space features\n"
+                "    • The API error detail is printed above"
+            )
         api.enable_custom_fields(sid)
         space_ids[space_key] = sid
         list_ids[space_key] = {}
