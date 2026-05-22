@@ -427,10 +427,9 @@ def check_interceptor() -> bool:
         return False
     try:
         data = json.loads(result.stdout)
-        return data.get("extension", {}).get("connected") or data.get("connected") or False
+        return bool(data.get("daemon"))
     except (json.JSONDecodeError, AttributeError):
-        # status might not return JSON — if it returned exit 0 it's probably ok
-        return result.returncode == 0
+        return "daemon: running" in result.stdout
 
 
 def main() -> None:
