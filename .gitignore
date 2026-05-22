@@ -1,0 +1,4 @@
+clickup_ids.yaml
+.env
+*.pyc
+__pycache__/

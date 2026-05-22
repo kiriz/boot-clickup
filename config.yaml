@@ -1,0 +1,309 @@
+# ============================================================
+# boot-clickup — Personal Life OS Configuration
+# ============================================================
+# This file controls EVERYTHING the setup script creates.
+# Edit it to match your life, then run: python setup.py
+#
+# Rules:
+#   - Space keys (inbox, work, etc.) are internal IDs — don't rename them
+#     unless you also update work_tracking_lists and seasonal_tasks below.
+#   - List keys within spaces are also internal — same rule applies.
+#   - Space/list names (what ClickUp shows) are fully customizable.
+#   - Colors use hex codes. A palette: https://coolors.co
+#   - Folders: spaces can have top-level lists OR folders with nested lists.
+#   - Views: gantt | table | board (add to any folder or list)
+#   - Statuses: define per space. Keep them short — 3 is ideal for most spaces.
+# ============================================================
+
+# ------ WORKSPACE -----------------------------------------------
+# The ClickUp Unlimited plan ($7/mo) supports unlimited spaces.
+# Free plan supports 5 spaces — remove 4 spaces if staying free.
+plan: unlimited   # free | unlimited | business | enterprise
+
+
+# ------ SPACES --------------------------------------------------
+spaces:
+
+  # ── 1. INBOX — Capture Everything ─────────────────────────────
+  inbox:
+    name: "INBOX"
+    color: "#87909E"
+    description: "Capture hub — everything lands here before being sorted"
+    lists:
+      today:
+        name: "01 TODAY"
+      this_week:
+        name: "02 THIS WEEK"
+      triage:
+        name: "03 TRIAGE"
+      someday_maybe:
+        name: "04 SOMEDAY MAYBE"
+    statuses:
+      - "Open"
+      - "In Progress"
+      - "Done"
+      - "Won't Do"
+
+  # ── 2. WORK — Professional Work ────────────────────────────────
+  # Customize: rename "ACTIVE ENGAGEMENTS" to "CLIENTS" if you prefer.
+  # Add per-client lists manually after setup (numbered: 01 ClientName).
+  work:
+    name: "WORK"
+    color: "#0075FF"
+    description: "Professional engagements and consulting work"
+    folders:
+      active_engagements:
+        name: "ACTIVE ENGAGEMENTS"
+        views: [gantt, table, board]
+        lists:
+          client_projects:
+            name: "00 CLIENTS — add via script"
+      internal:
+        name: "INTERNAL"
+        lists:
+          personal_ops:
+            name: "Personal Ops"
+      recurring:
+        name: "RECURRING"
+        lists:
+          weekly_recurring:
+            name: "Weekly Recurring"
+    statuses:
+      - "Backlog"
+      - "In Progress"
+      - "Review"
+      - "Done"
+      - "Archived"
+
+  # ── 3. PROJECTS — Side Projects ────────────────────────────────
+  # Hard cap: ACTIVE list = 3 projects max. Move to PARKED before adding a 4th.
+  projects:
+    name: "PROJECTS"
+    color: "#7C3AED"
+    description: "Personal side projects — max 3 active at once"
+    lists:
+      active:
+        name: "ACTIVE"
+        note: "Hard cap: 3 tasks max"
+        views: [gantt, table]
+      parked:
+        name: "PARKED"
+      ideas:
+        name: "IDEAS"
+      archive:
+        name: "ARCHIVE"
+    statuses:
+      - "Idea"
+      - "Scoping"
+      - "Building"
+      - "Testing"
+      - "Shipped"
+      - "Killed"
+
+  # ── 4. FAMILY — Zero-Miss ──────────────────────────────────────
+  # KIDS EVENTS is the first stop every morning. Non-negotiable.
+  family:
+    name: "FAMILY"
+    color: "#FF4444"
+    description: "Family tracking — kids events always checked first every day"
+    lists:
+      kids_events:
+        name: "KIDS EVENTS"
+        note: "ZERO-MISS — check first every morning"
+      family_todo:
+        name: "FAMILY TODO"
+      recurring_family:
+        name: "RECURRING FAMILY"
+    statuses:
+      - "Upcoming"
+      - "Confirmed"
+      - "Done"
+      - "Missed"
+
+  # ── 5. HEALTH ──────────────────────────────────────────────────
+  # Customize: rename lists to match your actual activities.
+  # Example: rename "sports" to "pickleball" or "crossfit" or "cycling".
+  health:
+    name: "HEALTH"
+    color: "#22C55E"
+    description: "Physical performance and wellness"
+    lists:
+      training:
+        name: "TRAINING"
+        note: "Rename to your primary sport (e.g. 10K TRAINING, CYCLING)"
+      sports:
+        name: "SPORTS"
+        note: "Rename to your recreational sport (e.g. PICKLEBALL, TENNIS)"
+      wellness:
+        name: "WELLNESS"
+    statuses:
+      - "Planned"
+      - "Done"
+      - "Skipped"
+      - "Modified"
+
+  # ── 6. LEARNING ────────────────────────────────────────────────
+  learning:
+    name: "LEARNING"
+    color: "#EAB308"
+    description: "Knowledge pipeline — books, podcasts, courses, daily feed"
+    lists:
+      books:
+        name: "BOOKS"
+      podcasts:
+        name: "PODCASTS"
+      daily_tech_feed:
+        name: "DAILY TECH FEED"
+      courses:
+        name: "COURSES"
+    statuses:
+      - "TBR"
+      - "In Progress"
+      - "Done"
+      - "Applied"
+
+  # ── 7. CAREER ──────────────────────────────────────────────────
+  # JOB PIPELINE has full pipeline statuses for job search tracking.
+  # GROWTH is for long-term career development separate from job hunting.
+  career:
+    name: "CAREER"
+    color: "#14B8A6"
+    description: "Job search pipeline and long-term career growth"
+    folders:
+      job_pipeline:
+        name: "JOB PIPELINE"
+        views: [gantt, table, board]
+        lists:
+          active_applications:
+            name: "ACTIVE APPLICATIONS"
+            note: "Has custom fields: Job URL, Contact, App Type, Compensation"
+          jd_archive:
+            name: "JD ARCHIVE"
+      growth:
+        name: "GROWTH"
+        lists:
+          skills_development:
+            name: "SKILLS DEVELOPMENT"
+          networking:
+            name: "NETWORKING"
+          opportunities:
+            name: "OPPORTUNITIES"
+          reflections:
+            name: "REFLECTIONS"
+    statuses:
+      - "Applied"
+      - "Recruiter Screen"
+      - "Technical Interview"
+      - "Panel Interview"
+      - "Offer"
+      - "Rejected"
+      - "Withdrew"
+
+  # ── 8. HOME ────────────────────────────────────────────────────
+  home:
+    name: "HOME"
+    color: "#F97316"
+    description: "Home management — seasonal calendar, projects, maintenance"
+    lists:
+      seasonal_calendar:
+        name: "SEASONAL CALENDAR"
+        note: "Pre-populated with recurring tasks (see seasonal_tasks below)"
+      home_projects:
+        name: "HOME PROJECTS"
+      maintenance:
+        name: "MAINTENANCE"
+    statuses:
+      - "Upcoming"
+      - "In Progress"
+      - "Done"
+      - "Skipped"
+
+  # ── 9. PERSONAL ────────────────────────────────────────────────
+  personal:
+    name: "PERSONAL"
+    color: "#EC4899"
+    description: "Life and leisure — games, social, miscellaneous"
+    lists:
+      games:
+        name: "GAMES"
+      social:
+        name: "SOCIAL"
+      misc:
+        name: "MISC"
+    statuses:
+      - "Backlog"
+      - "Active"
+      - "Done"
+
+
+# ------ COLUMN CONFIGURATION ------------------------------------
+# Lists in this map get two extra columns: Start Date + % Completed.
+# Add or remove list keys to match your tracking needs.
+# Format: space_key: [list_key, list_key, ...]
+work_tracking_lists:
+  work:     [personal_ops, weekly_recurring, client_projects]
+  projects: [active, parked]
+  family:   [kids_events, family_todo]
+  health:   [training, wellness]
+  learning: [books, courses]
+  career:   [skills_development, reflections, networking]
+  home:     [home_projects, maintenance, seasonal_calendar]
+
+
+# ------ JOB PIPELINE CUSTOM FIELDS ------------------------------
+# Added to CAREER / ACTIVE APPLICATIONS only.
+# Types: url | text | number | drop_down | date | checkbox
+job_pipeline_fields:
+  - name: "Job Posting URL"
+    type: url
+  - name: "Point of Contact"
+    type: text
+  - name: "Application Type"
+    type: drop_down
+    options: [Cold, Referral, Recruiter Outreach]
+  - name: "Compensation Target"
+    type: number
+
+
+# ------ HOME SEASONAL TASKS -------------------------------------
+# Pre-populated into HOME / SEASONAL CALENDAR.
+# Customize: replace with your actual recurring home tasks.
+# recurrence: annual | biannual | quarterly | monthly
+seasonal_tasks:
+  - name: "Fertilize lawn (spring)"
+    month: 3
+    recurrence: annual
+  - name: "Fertilize lawn (fall)"
+    month: 10
+    recurrence: annual
+  - name: "Winterize sprinkler system"
+    month: 10
+    recurrence: annual
+    note: "Stop before first freeze"
+  - name: "Check / plant new trees"
+    month: 4
+    recurrence: annual
+  - name: "AC service before summer"
+    month: 5
+    recurrence: annual
+  - name: "Gutter cleaning"
+    month: 11
+    recurrence: annual
+  - name: "HVAC filter replacement"
+    month: 3
+    recurrence: quarterly
+  - name: "Pest control check"
+    month: 4
+    recurrence: biannual
+
+
+# ------ FAVORITES (documentation only) -------------------------
+# ClickUp favorites can't be set via API — configure these manually.
+# The order below matches the morning review workflow (top = first checked).
+favorites_setup_order:
+  - "FAMILY → KIDS EVENTS         ← first every morning (zero-miss)"
+  - "HOME → SEASONAL CALENDAR     ← weekly trigger check"
+  - "INBOX → 01 TODAY             ← daily priorities"
+  - "WORK → ACTIVE ENGAGEMENTS    ← folder level (all clients)"
+  - "PROJECTS → ACTIVE            ← current WIP"
+  - "CAREER → ACTIVE APPLICATIONS ← job search pipeline"
