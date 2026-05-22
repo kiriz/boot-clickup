@@ -45,7 +45,7 @@ cd boot-clickup
 pip install pyyaml
 
 export CLICKUP_API_KEY=pk_xxxxx
-python setup.py
+python setup.py --workspace "Your Workspace Name"
 ```
 
 That's it. The script prints progress as it creates each space, folder, and list. When it finishes, `clickup_ids.yaml` has the ID of every created entity.
@@ -112,16 +112,18 @@ See `STRUCTURE.md` for a full explanation of every design decision.
 python setup.py [options]
 
 Options:
-  --api-key, -k    ClickUp personal API token (or set CLICKUP_API_KEY env var)
-  --config, -c     Path to config YAML file (default: config.yaml)
-  --dry-run        Print all API calls without executing them
-  --output, -o     Output file for generated IDs (default: clickup_ids.yaml)
+  --api-key, -k      ClickUp personal API token (or set CLICKUP_API_KEY env var)
+  --workspace, -w    Target workspace name (required if you belong to multiple workspaces)
+  --config, -c       Path to config YAML file (default: config.yaml)
+  --dry-run          Print all API calls without executing them
+  --output, -o       Output file for generated IDs (default: clickup_ids.yaml)
 
 Examples:
-  python setup.py                                # full setup
-  python setup.py --dry-run                      # preview only
-  python setup.py --config my_config.yaml        # custom config file
-  python setup.py --output my_workspace_ids.yaml # custom output path
+  python setup.py --workspace "My Workspace"                # full setup
+  python setup.py --dry-run                                 # preview only
+  python setup.py --workspace "My Workspace" --dry-run      # preview targeting specific workspace
+  python setup.py --config my_config.yaml                   # custom config file
+  python setup.py --output my_workspace_ids.yaml            # custom output path
 ```
 
 ---

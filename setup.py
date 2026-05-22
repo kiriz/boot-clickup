@@ -107,7 +107,7 @@ class ClickUpAPI:
 
     # --- Higher-level helpers ---
 
-    def get_workspace_id(self) -> str:
+    def get_workspace_id(self, workspace_name: Optional[str] = None) -> str:
         if self.dry_run:
             return "DRY_WORKSPACE_ID"
         data = self.get("/team")
@@ -117,6 +117,21 @@ class ClickUpAPI:
                 "No workspaces found for this API key.\n"
                 "  • Check the key at: ClickUp → Settings → Apps → API Token\n"
                 "  • Make sure you're using a Personal API Token, not an OAuth token"
+            )
+        if workspace_name:
+            match = next((t for t in teams if t["name"].lower() == workspace_name.lower()), None)
+            if not match:
+                names = ", ".join(f'"{t["name"]}"' for t in teams)
+                raise ValueError(
+                    f'Workspace "{workspace_name}" not found.\n'
+                    f"  Available workspaces: {names}"
+                )
+            return match["id"]
+        if len(teams) > 1:
+            names = "\n".join(f'    • {t["name"]}  ({t["id"]})' for t in teams)
+            raise ValueError(
+                "Multiple workspaces found — specify one with --workspace:\n"
+                f"{names}"
             )
         return teams[0]["id"]
 
@@ -176,12 +191,12 @@ class ClickUpAPI:
 # Build engine — reads config dict, calls API, returns ID map
 # ---------------------------------------------------------------------------
 
-def build(api: ClickUpAPI, cfg: dict) -> dict:
+def build(api: ClickUpAPI, cfg: dict, workspace_name: Optional[str] = None) -> dict:
     print("\n=== boot-clickup: Personal Life OS Setup ===\n")
 
     # 1. Workspace
     print("Step 1/6  Resolving workspace...")
-    workspace_id = api.get_workspace_id()
+    workspace_id = api.get_workspace_id(workspace_name)
     print(f"          Workspace ID: {workspace_id}\n")
 
     id_map: dict = {
@@ -342,10 +357,10 @@ def main() -> None:
         epilog="""
 Examples:
   export CLICKUP_API_KEY=pk_xxxxx
-  python setup.py                          # full setup
-  python setup.py --dry-run                # preview only
-  python setup.py --config my_config.yaml  # custom config
-  python setup.py --output my_ids.yaml     # custom output path
+  python setup.py --workspace "My Workspace"   # full setup
+  python setup.py --dry-run                    # preview only (no workspace needed)
+  python setup.py --config my_config.yaml      # custom config
+  python setup.py --output my_ids.yaml         # custom output path
 
 Get your API token:
   ClickUp → Settings (avatar, bottom-left) → Apps → API Token
@@ -360,6 +375,8 @@ Get your API token:
                         help="Print all API calls without executing them")
     parser.add_argument("--output", "-o", default="clickup_ids.yaml",
                         help="Output file for generated IDs (default: clickup_ids.yaml)")
+    parser.add_argument("--workspace", "-w", default="",
+                        help="Target workspace name (required if you belong to multiple workspaces)")
     args = parser.parse_args()
 
     # Validate
@@ -378,12 +395,14 @@ Get your API token:
     cfg = load_yaml(args.config)
     if args.dry_run:
         print(f"[DRY RUN] Config loaded from {args.config}")
+        ws = f'"{args.workspace}"' if args.workspace else "first available"
+        print(f"[DRY RUN] Target workspace: {ws}")
         print(f"[DRY RUN] Spaces to create: {list(cfg.get('spaces', {}).keys())}\n")
 
     # Build
     api = ClickUpAPI(api_key=args.api_key, dry_run=args.dry_run)
     try:
-        ids = build(api, cfg)
+        ids = build(api, cfg, workspace_name=args.workspace or None)
     except (ValueError, KeyError) as e:
         print(f"\nERROR: {e}")
         sys.exit(1)
