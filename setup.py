@@ -96,7 +96,16 @@ class ClickUpAPI:
             print(f"    WARNING: non-JSON response for {method} {path}: {result.stdout[:80]}")
             return {}
         if "err" in data:
-            print(f"    ERROR: API error for {method} {path}: {data['err']}")
+            ecode = data.get("ECODE", "")
+            msg = data["err"]
+            if ecode == "PAYWALL_004":
+                raise ValueError(
+                    f"Plan limit reached: {msg}\n"
+                    "  The Free plan supports 5 spaces. To build all 9 spaces:\n"
+                    "  Upgrade to ClickUp Unlimited ($7/mo) → Settings → Billing\n"
+                    "  Or reduce config.yaml to 5 spaces and set plan: free"
+                )
+            print(f"    ERROR: API error for {method} {path}: {msg}")
         return data
 
     def get(self, path: str) -> dict:
