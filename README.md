@@ -26,10 +26,12 @@ Every work-tracking list gets Start Date and % Completed columns. The CAREER / A
 
 ## Prerequisites
 
-- A ClickUp account (Free plan supports 5 spaces; Unlimited plan supports all 9)
 - Python 3.8+
 - PyYAML: `pip install pyyaml` (or `uv pip install pyyaml`)
 - Your ClickUp Personal API Token
+- A ClickUp workspace on the **Unlimited plan or higher**
+
+**Plan requirement:** ClickUp plans are **per workspace**, not per account. A newly created workspace starts on the Free plan (5-space limit) even if you have an Unlimited subscription on another workspace. The workspace you target with `--workspace` must be on Unlimited to support all 9 spaces. Upgrade at: ClickUp → Settings → Billing.
 
 **Get your API token:**  
 ClickUp → avatar (bottom-left) → Settings → Apps → API Token
