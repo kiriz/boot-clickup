@@ -164,11 +164,13 @@ FAVORITES = [
 
 
 def _list_url(list_id: str) -> str:
-    return f"{BASE_URL}/v/l/{list_id}"
+    # ClickUp 3.0 URL format: /v/l/li/{list_id}  (note: "li" prefix required)
+    return f"{BASE_URL}/v/l/li/{list_id}"
 
 
 def _folder_url(folder_id: str) -> str:
-    return f"{BASE_URL}/v/f/{folder_id}"
+    # ClickUp 3.0 folder URL — discovered empirically to require /v/f/li/ prefix
+    return f"{BASE_URL}/v/f/li/{folder_id}"
 
 
 def _entity_url(entity_type: str, entity_id: str) -> str:
@@ -177,48 +179,131 @@ def _entity_url(entity_type: str, entity_id: str) -> str:
     return _folder_url(entity_id)
 
 
-def _add_to_favorites() -> bool:
+def _js_eval(code: str) -> str:
+    """Run JS via eval --main, strip CSP noise, return the value string."""
+    if DRY_RUN:
+        return "dry-run"
+    result = subprocess.run(
+        [INTERCEPTOR_BIN, "eval", code, "--main", "--json"],
+        capture_output=True, text=True
+    )
+    try:
+        data = json.loads(result.stdout)
+        val = data.get("value", "")
+        return str(val) if val is not None else ""
+    except (json.JSONDecodeError, AttributeError):
+        return ""
+
+
+def _is_already_favorite() -> bool:
     """
-    ClickUp has a star icon in the header breadcrumb for the open list/folder.
-    Strategy:
-      1. Navigate to item URL so it's the active view
-      2. Look for a "star" or "favorite" button in the page header
-      3. Click it if not already starred
-      4. Fall back to right-click → context menu if header star not found
+    Check if the currently-open list/folder is already in the Favorites sidebar section.
+    Opens the star dropdown and checks if the 'Favorites' menu item has 'menu-item-selected'.
+    Closes the dropdown afterwards.
     """
-    # Try header star button first
-    for label in ["Add to Favorites", "Favorite", "Star"]:
-        ref = find_ref(label, role="button")
-        if ref:
-            result = interceptor("act", ref, wait_after=600)
-            if result:
-                return True
-    # Fall back: find the breadcrumb name element → right-click → menu item
-    for label in ["Add to Favorites", "Favorite"]:
-        ref = find_ref(label)
-        if ref:
-            result = interceptor("act", ref, wait_after=600)
-            if result:
-                return True
-    return False
+    # Open the star dropdown by dispatching full mouse event sequence
+    code = r"""
+var btn = document.querySelector('.button.favorited.cu-dropdown__toggle') ||
+          document.querySelector('.button.cu-dropdown__toggle');
+if (!btn) { JSON.stringify({found: false}); }
+else {
+  var rect = btn.getBoundingClientRect();
+  var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+  ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
+    btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
+  });
+  JSON.stringify({found: true, cls: btn.className});
+}
+"""
+    result = _js_eval(code)
+    if '"found":false' in result:
+        return False
+    time.sleep(0.8)
+
+    check = r"""
+var overlay = document.querySelector('.cdk-overlay-container');
+var items = Array.from(overlay ? overlay.querySelectorAll('[class*="menu-item"], .cdk-menu-item') : []);
+var favItem = items.find(function(i) { return i.textContent.trim() === 'Favorites'; });
+JSON.stringify({
+  found: !!favItem,
+  selected: favItem ? favItem.className.indexOf('menu-item-selected') >= 0 : false,
+  cls: favItem ? favItem.className : ''
+})
+"""
+    check_result = _js_eval(check)
+
+    # Close the dropdown
+    subprocess.run([INTERCEPTOR_BIN, "keys", "Escape", "--json"],
+                   capture_output=True, text=True)
+    time.sleep(0.3)
+
+    return '"selected":true' in check_result
+
+
+def _add_to_favorites_via_dropdown() -> bool:
+    """
+    Open the star dropdown and click the 'Favorites' section option.
+    Returns True if successfully added, False otherwise.
+    """
+    # Open dropdown
+    code = r"""
+var btn = document.querySelector('.button.favorited.cu-dropdown__toggle') ||
+          document.querySelector('.button.cu-dropdown__toggle');
+if (!btn) { 'not-found'; }
+else {
+  var rect = btn.getBoundingClientRect();
+  var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+  ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
+    btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
+  });
+  'ok';
+}
+"""
+    result = _js_eval(code)
+    if "not-found" in result:
+        return False
+    time.sleep(0.8)
+
+    # Click the 'Favorites' menu item
+    click_code = r"""
+var overlay = document.querySelector('.cdk-overlay-container');
+var items = Array.from(overlay ? overlay.querySelectorAll('[class*="menu-item"], .cdk-menu-item') : []);
+var favItem = items.find(function(i) { return i.textContent.trim() === 'Favorites'; });
+if (favItem) {
+  favItem.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}));
+  'clicked:' + favItem.className;
+} else { 'not-found'; }
+"""
+    click_result = _js_eval(click_code)
+    time.sleep(0.5)
+    return "clicked:" in click_result
 
 
 def step_favorites() -> None:
     print("\n── STEP 1: Favorites bar ──────────────────────────────────────")
     ok = 0
+    already = 0
     for name, entity_type, entity_id in FAVORITES:
         print(f"  {name}")
-        navigate(_entity_url(entity_type, entity_id), wait_ms=3000)
-        wait_stable()
-        if _add_to_favorites():
-            print(f"    ✓ added to favorites")
+        navigate(_entity_url(entity_type, entity_id), wait_ms=3500)
+        wait_stable(1500)
+
+        if DRY_RUN:
+            print(f"    ✓ [dry-run] would add to favorites")
+            ok += 1
+            continue
+
+        if _is_already_favorite():
+            print(f"    ✓ already in Favorites")
+            already += 1
+            ok += 1
+        elif _add_to_favorites_via_dropdown():
+            print(f"    ✓ added to Favorites")
             ok += 1
         else:
-            print(f"    ✗ could not locate Favorite button — screenshot for manual review")
-            screenshot(f"favorites-fail-{entity_id}")
-    print(f"\n  Result: {ok}/{len(FAVORITES)} items added to favorites")
-    if ok == len(FAVORITES):
-        screenshot("favorites-complete")
+            print(f"    ✗ could not add — check Chrome manually")
+
+    print(f"\n  Result: {ok}/{len(FAVORITES)} items in Favorites ({already} were already set)")
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +315,8 @@ def step_template() -> None:
     template_name = "PAI Standard Work List"
     list_id = LIST_IDS["personal_ops"]
 
-    navigate(_list_url(list_id), wait_ms=3000)
-    wait_stable()
+    navigate(_list_url(list_id), wait_ms=3500)
+    wait_stable(1500)
 
     # Right-click the list name in the sidebar to get context menu
     # ClickUp sidebar items typically have the list name as text + a "..." button on hover
@@ -273,8 +358,8 @@ def step_gantt() -> None:
     folder_id = FOLDER_IDS["active_engagements"]
 
     # Navigate to the folder, then switch to Gantt view
-    navigate(_folder_url(folder_id), wait_ms=3000)
-    wait_stable()
+    navigate(_folder_url(folder_id), wait_ms=3500)
+    wait_stable(1500)
 
     # Look for Gantt view tab in the view switcher
     gantt_ref = find_ref("Gantt", role="tab") or find_ref("Gantt")
