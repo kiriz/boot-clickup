@@ -184,7 +184,7 @@ def _js_eval(code: str) -> str:
     if DRY_RUN:
         return "dry-run"
     result = subprocess.run(
-        [INTERCEPTOR_BIN, "eval", code, "--main", "--json"],
+        [INTERCEPTOR_BIN, "eval", code, "--main"],
         capture_output=True, text=True
     )
     try:
