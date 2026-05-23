@@ -111,9 +111,9 @@ def interceptor(*args, wait_after=800, require_ok=False) -> dict:
 
 
 def navigate(url: str, wait_ms=2500) -> dict:
-    """Open URL and wait for it to stabilise."""
+    """Open URL, bring Chrome to foreground, wait for page to stabilise."""
     print(f"  → navigating to {url}")
-    result = interceptor("open", url, "--no-wait")
+    result = interceptor("open", url, "--activate", "--no-wait")
     time.sleep(wait_ms / 1000)
     return result
 
