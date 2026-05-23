@@ -146,18 +146,18 @@ def _ref(entry: dict) -> Optional[str]:
 
 def navigate_and_verify(url: str, expected_text: str, label: str, wait_ms: int = 3500) -> bool:
     """
-    Open URL with Chrome activation, then verify expected_text is in page text.
-    Retries once. Returns True if verified.
+    Navigate the current tab to url, then verify expected_text is in page text.
+    Uses `navigate` (not `open`) so no new tab is created. Retries once.
     """
     print(f"  ▸ {label}")
-    result = interceptor("open", url, "--activate", wait_after=wait_ms)
-    text = result.get("text", "")
+    interceptor("navigate", url, wait_after=wait_ms)
+    text = interceptor("read", "--text-only", wait_after=400).get("text", "")
 
     if expected_text.lower() not in text.lower():
         print(f"    ⚠ expected '{expected_text}' in page — retrying...")
         time.sleep(1.5)
-        result = interceptor("open", url, "--activate", wait_after=wait_ms)
-        text = result.get("text", "")
+        interceptor("navigate", url, wait_after=wait_ms)
+        text = interceptor("read", "--text-only", wait_after=400).get("text", "")
         if expected_text.lower() not in text.lower():
             print(f"    ✗ page verification failed after retry")
             return False
@@ -634,7 +634,11 @@ def main() -> None:
             print("  2. Interceptor extension is loaded (chrome://extensions)")
             print("  3. interceptor-daemon running (auto-starts on first use)")
             sys.exit(1)
-        print("✓ Connected\n")
+        print("✓ Connected")
+        # Bring Chrome to the foreground once. All subsequent navigations reuse this tab.
+        print("  Activating Chrome tab...")
+        interceptor("open", BASE_URL, "--activate", "--no-wait", wait_after=1500)
+        print()
 
     steps_to_run = [args.step] if args.step else list(STEPS.keys())
     print(f"Running: {', '.join(steps_to_run)}\n")
