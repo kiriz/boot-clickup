@@ -95,7 +95,19 @@ DRY_RUN = False
 
 
 def interceptor(*args, wait_after: int = 800, require_ok: bool = False) -> dict:
-    """Run an interceptor command with --json. Returns parsed response or {}."""
+    """
+    Run an interceptor command with --json. Returns parsed response or {}.
+
+    interceptor wraps results in a {success, data, tabId} envelope.
+    Commands that return content (read, find, wait-stable) put it in `data`.
+    Commands that just act (navigate, act, keys) return {success, tabId} with no `data`.
+    `status` uses a flat {daemon, bridge} format with no envelope.
+
+    We unwrap the envelope so callers see content directly:
+      read  → {"tree": ..., "text": ...}
+      find  → {"results": [...]}       (data was a list)
+      act   → {"success": True}        (no data key — unchanged)
+    """
     cmd = [INTERCEPTOR_BIN] + [str(a) for a in args] + ["--json"]
     if DRY_RUN:
         print(f"    [dry-run] interceptor {' '.join(str(a) for a in args)}")
@@ -109,10 +121,19 @@ def interceptor(*args, wait_after: int = 800, require_ok: bool = False) -> dict:
             raise RuntimeError(f"interceptor {args[0]} failed: {msg[:120]}")
         return {"error": msg[:120]}
     try:
-        data = json.loads(result.stdout)
-        return data if isinstance(data, dict) else {"result": data}
+        raw = json.loads(result.stdout)
     except json.JSONDecodeError:
         return {"raw": result.stdout.strip()}
+    if not isinstance(raw, dict):
+        return {"result": raw}
+    # Unwrap {success, data, tabId} envelope when present
+    if "success" in raw and "data" in raw:
+        inner = raw["data"]
+        if isinstance(inner, dict):
+            return inner                    # read → {tree, text}; wait-stable → {stable,...}
+        if isinstance(inner, list):
+            return {"results": inner}       # find → {results: [...]}
+    return raw
 
 
 def _js_eval(code: str) -> str:
@@ -135,8 +156,8 @@ def _js_eval(code: str) -> str:
 
 
 def _extract_refs(find_result: dict) -> list:
-    """Pull the list of result entries from a find response."""
-    r = find_result.get("results") or find_result.get("result") or []
+    """Pull the list of result entries from a find response (unwrapped by interceptor())."""
+    r = find_result.get("results") or find_result.get("result") or find_result.get("data") or []
     return r if isinstance(r, list) else []
 
 
@@ -259,7 +280,7 @@ def _favorite_action() -> str:
 
     # Open the favorites dropdown via native accessibility event
     act_result = interceptor("act", star_ref, wait_after=500)
-    if "error" in act_result:
+    if act_result.get("error"):  # ignore error: null (always present in act response)
         print(f"    ⚠ act failed: {act_result.get('error', '')[:80]}")
         return "failed"
 
