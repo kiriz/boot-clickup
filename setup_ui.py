@@ -144,6 +144,12 @@ def _ref(entry: dict) -> Optional[str]:
     return entry.get("ref") or entry.get("index")
 
 
+def _page_text() -> str:
+    """Read visible text from the current tab. wait-stable lets SPA routing settle first."""
+    interceptor("wait-stable", "--ms", "2000", "--timeout", "10000", wait_after=0)
+    return interceptor("read", wait_after=400).get("text", "")
+
+
 def navigate_and_verify(url: str, expected_text: str, label: str, wait_ms: int = 3500) -> bool:
     """
     Navigate the current tab to url, then verify expected_text is in page text.
@@ -151,13 +157,13 @@ def navigate_and_verify(url: str, expected_text: str, label: str, wait_ms: int =
     """
     print(f"  ▸ {label}")
     interceptor("navigate", url, wait_after=wait_ms)
-    text = interceptor("read", "--text-only", wait_after=400).get("text", "")
+    text = _page_text()
 
     if expected_text.lower() not in text.lower():
         print(f"    ⚠ expected '{expected_text}' in page — retrying...")
         time.sleep(1.5)
         interceptor("navigate", url, wait_after=wait_ms)
-        text = interceptor("read", "--text-only", wait_after=400).get("text", "")
+        text = _page_text()
         if expected_text.lower() not in text.lower():
             print(f"    ✗ page verification failed after retry")
             return False
