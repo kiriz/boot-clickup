@@ -2,21 +2,26 @@
 """
 setup_ui.py — Automates the 4 ClickUp manual UI steps using the interceptor CLI.
 
-Steps (in order):
-  1. Favorites bar — add 6 items in morning-review order
-  2. List template — save WORK / Personal Ops as "PAI Standard Work List"
-  3. Gantt settings — hide weekends in WORK / ACTIVE ENGAGEMENTS gantt
-  4. Automations — create 4 automation rules
+Robust Interceptor patterns used throughout:
+  1. navigate_and_verify(): compound open + text verification + retry once.
+     Always check the page loaded correctly before acting.
+  2. Semantic finding: `interceptor find "label" --role type` locates refs by
+     meaning, not CSS class. Refs change every page load; semantic names don't.
+  3. act + immediate eval: After `interceptor act <ref>` opens an Angular CDK
+     overlay, the ONLY safe next call is `eval --main` with synchronous JS.
+     Any `interceptor tree/state/find/read` between them triggers wait_stable
+     which closes the overlay. Collect all refs BEFORE opening any overlay.
 
-Requirements:
-  - Chrome running with Interceptor extension loaded
-  - `interceptor` binary in PATH (~/Projects/tools/ai-dev-tools/interceptor/dist/)
-  - ClickUp already logged in in Chrome
+Steps:
+  1. favorites   — add 6 sidebar items in morning-review order
+  2. template    — save WORK / Personal Ops as "PAI Standard Work List"
+  3. gantt       — hide weekends in WORK / ACTIVE ENGAGEMENTS Gantt
+  4. automations — guided: opens automation builder for each of 4 rules
 
 Usage:
   python setup_ui.py
-  python setup_ui.py --dry-run   # print actions without executing them
-  python setup_ui.py --step favorites|template|gantt|automations  # run one step only
+  python setup_ui.py --dry-run
+  python setup_ui.py --step favorites|template|gantt|automations
 """
 
 import argparse
@@ -36,8 +41,8 @@ _INTERCEPTOR_FALLBACK = os.path.expanduser(
     "~/Projects/tools/ai-dev-tools/interceptor/dist/interceptor"
 )
 
+
 def _resolve_interceptor() -> str:
-    """Return the interceptor binary path, searching PATH then the known install location."""
     found = shutil.which("interceptor")
     if found:
         return found
@@ -46,10 +51,11 @@ def _resolve_interceptor() -> str:
     raise FileNotFoundError(
         "interceptor binary not found.\n"
         "  Expected: ~/Projects/tools/ai-dev-tools/interceptor/dist/interceptor\n"
-        "  Or add it to PATH: export PATH=\"$PATH:~/Projects/tools/ai-dev-tools/interceptor/dist\""
+        "  Or: export PATH=\"$PATH:~/Projects/tools/ai-dev-tools/interceptor/dist\""
     )
 
-INTERCEPTOR_BIN = None  # resolved in main() after arg parsing
+
+INTERCEPTOR_BIN: Optional[str] = None  # resolved in main()
 
 # ---------------------------------------------------------------------------
 # Workspace constants (from ~/.claude/PAI/USER/CLICKUP.yaml)
@@ -59,19 +65,19 @@ WORKSPACE_ID = "90141166201"
 BASE_URL = f"https://app.clickup.com/{WORKSPACE_ID}"
 
 LIST_IDS = {
-    "kids_events":        "901416671374",   # FAMILY → KIDS EVENTS
-    "seasonal_calendar":  "901416671390",   # HOME → SEASONAL CALENDAR
-    "today":              "901416671358",   # INBOX → 01 TODAY
-    "active":             "901416671366",   # PROJECTS → ACTIVE
-    "active_applications":"901416671384",   # CAREER → ACTIVE APPLICATIONS
-    "personal_ops":       "901416671363",   # WORK → Personal Ops
-    "triage":             "901416671360",   # INBOX → 03 TRIAGE
-    "jd_archive":         "901416671385",   # CAREER → JD ARCHIVE
-    "archive":            "901416671369",   # PROJECTS → ARCHIVE
+    "kids_events":         "901416671374",
+    "seasonal_calendar":   "901416671390",
+    "today":               "901416671358",
+    "active":              "901416671366",
+    "active_applications": "901416671384",
+    "personal_ops":        "901416671363",
+    "triage":              "901416671360",
+    "jd_archive":          "901416671385",
+    "archive":             "901416671369",
 }
 
 FOLDER_IDS = {
-    "active_engagements": "90149582395",   # WORK → ACTIVE ENGAGEMENTS
+    "active_engagements": "90149582395",
 }
 
 SPACE_IDS = {
@@ -82,15 +88,15 @@ SPACE_IDS = {
 }
 
 # ---------------------------------------------------------------------------
-# Interceptor wrapper
+# Core helpers
 # ---------------------------------------------------------------------------
 
 DRY_RUN = False
 
 
-def interceptor(*args, wait_after=800, require_ok=False) -> dict:
-    """Run an interceptor command. Returns parsed JSON or empty dict on failure."""
-    cmd = [INTERCEPTOR_BIN] + list(args) + ["--json"]
+def interceptor(*args, wait_after: int = 800, require_ok: bool = False) -> dict:
+    """Run an interceptor command with --json. Returns parsed response or {}."""
+    cmd = [INTERCEPTOR_BIN] + [str(a) for a in args] + ["--json"]
     if DRY_RUN:
         print(f"    [dry-run] interceptor {' '.join(str(a) for a in args)}")
         return {"status": "ok"}
@@ -99,10 +105,9 @@ def interceptor(*args, wait_after=800, require_ok=False) -> dict:
         time.sleep(wait_after / 1000)
     if result.returncode != 0:
         msg = (result.stderr or result.stdout or "").strip()
-        print(f"    ✗ interceptor {args[0]}: {msg[:120]}")
         if require_ok:
-            raise RuntimeError(f"Command failed: {cmd}")
-        return {}
+            raise RuntimeError(f"interceptor {args[0]} failed: {msg[:120]}")
+        return {"error": msg[:120]}
     try:
         data = json.loads(result.stdout)
         return data if isinstance(data, dict) else {"result": data}
@@ -110,200 +115,196 @@ def interceptor(*args, wait_after=800, require_ok=False) -> dict:
         return {"raw": result.stdout.strip()}
 
 
-def navigate(url: str, wait_ms=2500) -> dict:
-    """Open URL, bring Chrome to foreground, wait for page to stabilise."""
-    print(f"  → navigating to {url}")
-    result = interceptor("open", url, "--activate", "--no-wait")
-    time.sleep(wait_ms / 1000)
-    return result
-
-
-def screenshot(label: str) -> None:
-    """Capture a screenshot to confirm the current state."""
-    if DRY_RUN:
-        print(f"    [dry-run] screenshot: {label}")
-        return
-    result = subprocess.run(
-        [INTERCEPTOR_BIN, "screenshot", "--save"],
-        capture_output=True, text=True
-    )
-    path = result.stdout.strip().split("\n")[-1] if result.stdout else "(unknown)"
-    print(f"    📸 screenshot saved: {path}  [{label}]")
-
-
-def find_ref(query: str, role: Optional[str] = None) -> Optional[str]:
-    """Find an element by text query, return its ref (eN) or None."""
-    if DRY_RUN:
-        return "e99"
-    args = ["find", query]
-    if role:
-        args += ["--role", role]
-    data = interceptor(*args, wait_after=0)
-    results = data.get("results") or data.get("result") or []
-    if isinstance(results, list) and results:
-        return results[0].get("ref") or results[0].get("index")
-    return None
-
-
-def wait_stable(ms: int = 1500) -> None:
-    interceptor("wait-stable", "--ms", str(ms), wait_after=0)
-
-
-# ---------------------------------------------------------------------------
-# Step 1 — Favorites
-# ---------------------------------------------------------------------------
-
-FAVORITES = [
-    ("FAMILY → KIDS EVENTS",           "list",   LIST_IDS["kids_events"]),
-    ("HOME → SEASONAL CALENDAR",        "list",   LIST_IDS["seasonal_calendar"]),
-    ("INBOX → 01 TODAY",                "list",   LIST_IDS["today"]),
-    ("WORK → ACTIVE ENGAGEMENTS",       "folder", FOLDER_IDS["active_engagements"]),
-    ("PROJECTS → ACTIVE",               "list",   LIST_IDS["active"]),
-    ("CAREER → ACTIVE APPLICATIONS",    "list",   LIST_IDS["active_applications"]),
-]
-
-
-def _list_url(list_id: str) -> str:
-    # ClickUp 3.0 URL format: /v/l/li/{list_id}  (note: "li" prefix required)
-    return f"{BASE_URL}/v/l/li/{list_id}"
-
-
-def _folder_url(folder_id: str) -> str:
-    # ClickUp 3.0 folder URL — discovered empirically to require /v/f/li/ prefix
-    return f"{BASE_URL}/v/f/li/{folder_id}"
-
-
-def _entity_url(entity_type: str, entity_id: str) -> str:
-    if entity_type == "list":
-        return _list_url(entity_id)
-    return _folder_url(entity_id)
-
-
 def _js_eval(code: str) -> str:
-    """Run JS via eval --main, strip CSP noise, return the value string."""
+    """
+    Run synchronous JS via `eval --main`. Returns the 'value' string.
+    IMPORTANT: do NOT add --json — it breaks the browser's JSON object.
+    """
     if DRY_RUN:
         return "dry-run"
     result = subprocess.run(
         [INTERCEPTOR_BIN, "eval", code, "--main"],
-        capture_output=True, text=True
+        capture_output=True, text=True,
     )
     try:
         data = json.loads(result.stdout)
         val = data.get("value", "")
         return str(val) if val is not None else ""
     except (json.JSONDecodeError, AttributeError):
-        return ""
+        return result.stdout.strip()
 
 
-def _is_already_favorite() -> bool:
+def _extract_refs(find_result: dict) -> list:
+    """Pull the list of result entries from a find response."""
+    r = find_result.get("results") or find_result.get("result") or []
+    return r if isinstance(r, list) else []
+
+
+def _ref(entry: dict) -> Optional[str]:
+    return entry.get("ref") or entry.get("index")
+
+
+def navigate_and_verify(url: str, expected_text: str, label: str, wait_ms: int = 3500) -> bool:
     """
-    Check if the currently-open list/folder is already in the Favorites sidebar section.
-    Opens the star dropdown and checks if the 'Favorites' menu item has 'menu-item-selected'.
-    Closes the dropdown afterwards.
+    Open URL with Chrome activation, then verify expected_text is in page text.
+    Retries once. Returns True if verified.
     """
-    # Open the star dropdown by dispatching full mouse event sequence
-    code = r"""
-var btn = document.querySelector('.button.favorited.cu-dropdown__toggle') ||
-          document.querySelector('.button.cu-dropdown__toggle');
-if (!btn) { JSON.stringify({found: false}); }
-else {
-  var rect = btn.getBoundingClientRect();
-  var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
-  ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
-    btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
-  });
-  JSON.stringify({found: true, cls: btn.className});
-}
+    print(f"  ▸ {label}")
+    result = interceptor("open", url, "--activate", wait_after=wait_ms)
+    text = result.get("text", "")
+
+    if expected_text.lower() not in text.lower():
+        print(f"    ⚠ expected '{expected_text}' in page — retrying...")
+        time.sleep(1.5)
+        result = interceptor("open", url, "--activate", wait_after=wait_ms)
+        text = result.get("text", "")
+        if expected_text.lower() not in text.lower():
+            print(f"    ✗ page verification failed after retry")
+            return False
+    return True
+
+
+def screenshot(label: str) -> None:
+    if DRY_RUN:
+        print(f"    [dry-run] screenshot: {label}")
+        return
+    result = subprocess.run(
+        [INTERCEPTOR_BIN, "screenshot", "--save"], capture_output=True, text=True
+    )
+    path = (result.stdout or "").strip().split("\n")[-1]
+    print(f"    📸 {path}  [{label}]")
+
+
+def _list_url(list_id: str) -> str:
+    return f"{BASE_URL}/v/l/li/{list_id}"
+
+
+def _folder_url(folder_id: str) -> str:
+    return f"{BASE_URL}/v/f/li/{folder_id}"
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — Favorites
+# ---------------------------------------------------------------------------
+
+# (name, entity_type, entity_id, verify_text)
+FAVORITES = [
+    ("FAMILY → KIDS EVENTS",         "list",   LIST_IDS["kids_events"],         "Kids Events"),
+    ("HOME → SEASONAL CALENDAR",      "list",   LIST_IDS["seasonal_calendar"],   "Seasonal Calendar"),
+    ("INBOX → 01 TODAY",              "list",   LIST_IDS["today"],               "01 TODAY"),
+    ("WORK → ACTIVE ENGAGEMENTS",     "folder", FOLDER_IDS["active_engagements"],"ACTIVE ENGAGEMENTS"),
+    ("PROJECTS → ACTIVE",             "list",   LIST_IDS["active"],              "ACTIVE"),
+    ("CAREER → ACTIVE APPLICATIONS",  "list",   LIST_IDS["active_applications"], "ACTIVE APPLICATIONS"),
+]
+
+# JS run immediately after `act <star_ref>` opens the CDK dropdown.
+# Checks if already favorited; clicks if not; closes if already selected.
+# Returns JSON string with {status} or {error}.
+_FAVORITE_JS = r"""
+(function() {
+    var overlay = document.querySelector('.cdk-overlay-container');
+    if (!overlay) return JSON.stringify({error: 'no-overlay'});
+    var items = Array.from(
+        overlay.querySelectorAll('[class*="cu3-menu-item"],[role="menuitem"],[class*="cdk-menu-item"]')
+    );
+    if (!items.length) return JSON.stringify({error: 'no-menu-items'});
+    var favItem = items.find(function(i) { return i.textContent.trim() === 'Favorites'; });
+    if (!favItem) {
+        return JSON.stringify({
+            error: 'fav-item-not-found',
+            available: items.map(function(i){ return i.textContent.trim(); }).join(' | ')
+        });
+    }
+    var selected = favItem.className.indexOf('menu-item-selected') >= 0
+                   || favItem.getAttribute('aria-checked') === 'true';
+    if (selected) {
+        document.body.click();
+        return JSON.stringify({status: 'already_favorite'});
+    }
+    favItem.click();
+    return JSON.stringify({status: 'added'});
+})()
 """
-    result = _js_eval(code)
-    if '"found":false' in result:
-        return False
-    time.sleep(0.8)
-
-    check = r"""
-var overlay = document.querySelector('.cdk-overlay-container');
-var items = Array.from(overlay ? overlay.querySelectorAll('[class*="menu-item"], .cdk-menu-item') : []);
-var favItem = items.find(function(i) { return i.textContent.trim() === 'Favorites'; });
-JSON.stringify({
-  found: !!favItem,
-  selected: favItem ? favItem.className.indexOf('menu-item-selected') >= 0 : false,
-  cls: favItem ? favItem.className : ''
-})
-"""
-    check_result = _js_eval(check)
-
-    # Close the dropdown
-    subprocess.run([INTERCEPTOR_BIN, "keys", "Escape", "--json"],
-                   capture_output=True, text=True)
-    time.sleep(0.3)
-
-    return '"selected":true' in check_result
 
 
-def _add_to_favorites_via_dropdown() -> bool:
+def _favorite_action() -> str:
     """
-    Open the star dropdown and click the 'Favorites' section option.
-    Returns True if successfully added, False otherwise.
-    """
-    # Open dropdown
-    code = r"""
-var btn = document.querySelector('.button.favorited.cu-dropdown__toggle') ||
-          document.querySelector('.button.cu-dropdown__toggle');
-if (!btn) { 'not-found'; }
-else {
-  var rect = btn.getBoundingClientRect();
-  var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
-  ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
-    btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
-  });
-  'ok';
-}
-"""
-    result = _js_eval(code)
-    if "not-found" in result:
-        return False
-    time.sleep(0.8)
+    Detect and toggle Favorites for the currently-open list/folder.
+    Returns: 'already_favorite' | 'added' | 'failed'
 
-    # Click the 'Favorites' menu item
-    click_code = r"""
-var overlay = document.querySelector('.cdk-overlay-container');
-var items = Array.from(overlay ? overlay.querySelectorAll('[class*="menu-item"], .cdk-menu-item') : []);
-var favItem = items.find(function(i) { return i.textContent.trim() === 'Favorites'; });
-if (favItem) {
-  favItem.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}));
-  'clicked:' + favItem.className;
-} else { 'not-found'; }
-"""
-    click_result = _js_eval(click_code)
-    time.sleep(0.5)
-    return "clicked:" in click_result
+    Pattern:
+      1. find "Dropdown menu" --role button  →  collect star button ref (index 1)
+      2. act <star_ref>                      →  opens CDK overlay
+      3. eval --main (immediately)           →  check + click, NO reads between 2 and 3
+    """
+    # Collect star button ref via semantic find.
+    # find triggers wait_stable — fine here, no overlay is open yet.
+    find_data = interceptor("find", "Dropdown menu", "--role", "button", wait_after=600)
+    entries = _extract_refs(find_data)
+    if len(entries) < 2:
+        print(f"    ⚠ found {len(entries)} 'Dropdown menu' buttons — expected ≥2")
+        return "failed"
+
+    # Index 0 = location/hierarchy picker, index 1 = star/favorites button
+    star_ref = _ref(entries[1])
+    if not star_ref:
+        print(f"    ⚠ star button has no ref: {entries[1]}")
+        return "failed"
+
+    # Open the favorites dropdown via native accessibility event
+    act_result = interceptor("act", star_ref, wait_after=500)
+    if "error" in act_result:
+        print(f"    ⚠ act failed: {act_result.get('error', '')[:80]}")
+        return "failed"
+
+    # IMMEDIATELY check + click inside CDK overlay — zero interceptor reads between act and eval
+    val = _js_eval(_FAVORITE_JS)
+    time.sleep(0.4)
+
+    if '"status":"already_favorite"' in val:
+        return "already_favorite"
+    if '"status":"added"' in val:
+        return "added"
+
+    # Extract error info for debugging
+    try:
+        info = json.loads(val)
+        print(f"    ⚠ overlay: {info.get('error','?')} — {info.get('available','')[:80]}")
+    except Exception:
+        print(f"    ⚠ unexpected overlay response: {val[:100]}")
+    return "failed"
 
 
 def step_favorites() -> None:
     print("\n── STEP 1: Favorites bar ──────────────────────────────────────")
-    ok = 0
-    already = 0
-    for name, entity_type, entity_id in FAVORITES:
-        print(f"  {name}")
-        navigate(_entity_url(entity_type, entity_id), wait_ms=3500)
-        wait_stable(1500)
+    ok = already = 0
+
+    for name, entity_type, entity_id, verify_text in FAVORITES:
+        url = _list_url(entity_id) if entity_type == "list" else _folder_url(entity_id)
+        if not navigate_and_verify(url, verify_text, name, wait_ms=3500):
+            print(f"    ✗ navigation failed — skipping")
+            continue
 
         if DRY_RUN:
-            print(f"    ✓ [dry-run] would add to favorites")
+            print(f"    ✓ [dry-run]")
             ok += 1
             continue
 
-        if _is_already_favorite():
+        status = _favorite_action()
+        if status == "already_favorite":
             print(f"    ✓ already in Favorites")
             already += 1
             ok += 1
-        elif _add_to_favorites_via_dropdown():
+        elif status == "added":
             print(f"    ✓ added to Favorites")
             ok += 1
+            screenshot(f"fav-{entity_id}")
         else:
-            print(f"    ✗ could not add — check Chrome manually")
+            print(f"    ✗ failed — add manually: hover item in sidebar → ★")
 
-    print(f"\n  Result: {ok}/{len(FAVORITES)} items in Favorites ({already} were already set)")
+    print(f"\n  Result: {ok}/{len(FAVORITES)} in Favorites ({already} already set)")
+    if ok < len(FAVORITES):
+        print("  Remaining items: hover each in ClickUp sidebar → click ★")
 
 
 # ---------------------------------------------------------------------------
@@ -313,200 +314,280 @@ def step_favorites() -> None:
 def step_template() -> None:
     print("\n── STEP 2: Save list template ─────────────────────────────────")
     template_name = "PAI Standard Work List"
-    list_id = LIST_IDS["personal_ops"]
+    url = _list_url(LIST_IDS["personal_ops"])
 
-    navigate(_list_url(list_id), wait_ms=3500)
-    wait_stable(1500)
+    if not navigate_and_verify(url, "Personal Ops", "WORK → Personal Ops list", wait_ms=3500):
+        _print_manual("template", template_name)
+        return
 
-    # Right-click the list name in the sidebar to get context menu
-    # ClickUp sidebar items typically have the list name as text + a "..." button on hover
-    # Strategy: find the "..." (more options) button for the list and click it
-    print(f"  looking for list options menu...")
-    ref = find_ref("Personal Ops")
-    if ref:
-        # Right-click to open context menu
-        interceptor("rightclick", ref, wait_after=800)
-        # Look for "Save as Template" in the context menu
-        tmpl_ref = find_ref("Save as Template")
-        if tmpl_ref:
-            interceptor("act", tmpl_ref, wait_after=1000)
-            # Template name dialog — type the name
-            name_ref = find_ref("Template name", role="textbox") or find_ref("Name", role="textbox")
-            if not name_ref:
-                # Try finding any visible input
-                name_ref = find_ref(template_name, role="textbox")
-            if name_ref:
-                interceptor("type", name_ref, template_name, wait_after=500)
-            # Click Save
-            save_ref = find_ref("Save", role="button") or find_ref("Create", role="button")
-            if save_ref:
-                interceptor("act", save_ref, wait_after=1000)
-                print(f"  ✓ template '{template_name}' saved")
-                screenshot("template-saved")
-                return
-    print(f"  ✗ could not automate template save")
-    print(f"    Manual step: WORK → Personal Ops → right-click → Save as Template → '{template_name}'")
-    screenshot("template-fail")
+    screenshot("template-before")
+
+    # Find "Personal Ops" in the a11y tree (sidebar item)
+    find_data = interceptor("find", "Personal Ops", wait_after=500)
+    entries = _extract_refs(find_data)
+    if not entries:
+        print("  ✗ Could not find 'Personal Ops' in a11y tree")
+        _print_manual("template", template_name)
+        return
+
+    # Prefer a sidebar/nav item role over the page heading
+    ref = None
+    for e in entries:
+        if e.get("role", "") in ("treeitem", "menuitem", "link", "listitem"):
+            ref = _ref(e)
+            break
+    if not ref:
+        ref = _ref(entries[0])
+
+    if not ref:
+        print("  ✗ Could not extract ref for 'Personal Ops'")
+        _print_manual("template", template_name)
+        return
+
+    # Right-click to open context menu
+    interceptor("rightclick", ref, wait_after=1000)
+    screenshot("template-context-menu")
+
+    # Find "Save as Template" in context menu
+    find_tmpl = interceptor("find", "Save as Template", wait_after=500)
+    tmpl_entries = _extract_refs(find_tmpl)
+    if not tmpl_entries:
+        print("  ✗ 'Save as Template' not found in context menu")
+        _print_manual("template", template_name)
+        return
+
+    interceptor("act", _ref(tmpl_entries[0]), wait_after=1500)
+    screenshot("template-dialog")
+
+    # Find the template name input
+    find_input = interceptor("find", "Template", "--role", "textbox", wait_after=500)
+    input_entries = _extract_refs(find_input)
+    if not input_entries:
+        find_input = interceptor("find", "Name", "--role", "textbox", wait_after=500)
+        input_entries = _extract_refs(find_input)
+
+    if input_entries:
+        input_ref = _ref(input_entries[0])
+        interceptor("act", input_ref, wait_after=300)
+        interceptor("keys", "Control+a", wait_after=200)
+        interceptor("type", input_ref, template_name, wait_after=500)
+
+    # Click Save / Create
+    find_save = interceptor("find", "Save", "--role", "button", wait_after=300)
+    save_entries = _extract_refs(find_save)
+    if not save_entries:
+        find_save = interceptor("find", "Create", "--role", "button", wait_after=300)
+        save_entries = _extract_refs(find_save)
+
+    if save_entries:
+        interceptor("act", _ref(save_entries[0]), wait_after=1000)
+        print(f"  ✓ Template '{template_name}' save attempted")
+        screenshot("template-saved")
+    else:
+        print("  ✗ Save button not found — complete the dialog manually")
+        _print_manual("template", template_name)
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — Gantt hide weekends
+# Step 3 — Gantt: hide weekends
 # ---------------------------------------------------------------------------
+
+# Checks checkbox/toggle state for weekends setting (read-only, no DOM mutation).
+_WEEKENDS_STATE_JS = r"""
+(function() {
+    var els = Array.from(document.querySelectorAll(
+        'input[type="checkbox"],[role="checkbox"],[role="switch"]'
+    ));
+    var found = els.find(function(el) {
+        var label = (el.textContent || el.getAttribute('aria-label') || '');
+        var parent = el.closest('[class*="setting"],[class*="toggle"],[class*="gantt"]');
+        var ctx = (parent ? parent.textContent : '') + label;
+        return ctx.toLowerCase().indexOf('weekend') >= 0;
+    });
+    if (!found) return JSON.stringify({found: false});
+    return JSON.stringify({
+        found: true,
+        checked: !!(found.checked || found.getAttribute('aria-checked') === 'true')
+    });
+})()
+"""
+
 
 def step_gantt() -> None:
     print("\n── STEP 3: Gantt — hide weekends ──────────────────────────────")
-    folder_id = FOLDER_IDS["active_engagements"]
+    url = _folder_url(FOLDER_IDS["active_engagements"])
 
-    # Navigate to the folder, then switch to Gantt view
-    navigate(_folder_url(folder_id), wait_ms=3500)
-    wait_stable(1500)
+    if not navigate_and_verify(url, "ACTIVE ENGAGEMENTS", "WORK → ACTIVE ENGAGEMENTS folder", wait_ms=3500):
+        _print_manual("gantt")
+        return
 
-    # Look for Gantt view tab in the view switcher
-    gantt_ref = find_ref("Gantt", role="tab") or find_ref("Gantt")
-    if gantt_ref:
-        interceptor("act", gantt_ref, wait_after=2000)
-        wait_stable(2000)
+    screenshot("gantt-folder")
+
+    # Find and click Gantt view tab
+    gantt_entries = _extract_refs(interceptor("find", "Gantt", wait_after=500))
+    if gantt_entries:
+        interceptor("act", _ref(gantt_entries[0]), wait_after=2500)
+        screenshot("gantt-view")
     else:
-        # Try navigating directly to gantt URL (ClickUp supports ?view=gantt in some versions)
-        navigate(f"{_folder_url(folder_id)}?view=gantt", wait_ms=3000)
+        print("  ⚠ Gantt tab not found — trying direct URL")
+        navigate_and_verify(f"{url}?view=gantt", "ACTIVE ENGAGEMENTS", "Gantt URL", wait_ms=3000)
 
-    screenshot("gantt-opened")
+    # Find settings button — collect ref BEFORE opening the settings panel
+    settings_entries = _extract_refs(interceptor("find", "Settings", "--role", "button", wait_after=500))
+    if not settings_entries:
+        settings_entries = _extract_refs(interceptor("find", "Gantt settings", wait_after=500))
+    if not settings_entries:
+        print("  ✗ Gantt settings button not found")
+        _print_manual("gantt")
+        return
 
-    # Click the Settings/gear icon in the Gantt toolbar
-    settings_ref = (
-        find_ref("Settings", role="button")
-        or find_ref("Gantt Settings")
-        or find_ref("settings")
-    )
-    if settings_ref:
-        interceptor("act", settings_ref, wait_after=1000)
-        # Find and uncheck "Show weekends"
-        weekends_ref = find_ref("Show weekends") or find_ref("Weekends")
-        if weekends_ref:
-            # Check if it's currently checked; if so, click to uncheck
-            data = interceptor("html", weekends_ref, wait_after=0)
-            html = data.get("html") or data.get("raw") or ""
-            if 'checked' in html.lower() or 'true' in html.lower():
-                interceptor("act", weekends_ref, wait_after=500)
-                print("  ✓ weekends hidden in Gantt")
-                screenshot("gantt-weekends-hidden")
-                return
-            else:
-                # Checkbox may not be checked — just click to toggle
-                interceptor("act", weekends_ref, wait_after=500)
-                print("  ✓ weekends toggle clicked")
-                screenshot("gantt-weekends-toggled")
-                return
+    # Open settings panel
+    interceptor("act", _ref(settings_entries[0]), wait_after=1000)
+    screenshot("gantt-settings")
 
-    print("  ✗ could not locate Gantt settings — please hide weekends manually")
-    print("    Manual step: WORK → ACTIVE ENGAGEMENTS → Gantt view → gear icon → uncheck 'Show weekends'")
-    screenshot("gantt-settings-fail")
+    # Find weekends toggle — collect ref BEFORE reading its state
+    wk_entries = _extract_refs(interceptor("find", "Show weekends", wait_after=500))
+    if not wk_entries:
+        wk_entries = _extract_refs(interceptor("find", "Weekends", wait_after=500))
+    if not wk_entries:
+        print("  ✗ 'Show weekends' toggle not found")
+        _print_manual("gantt")
+        return
+
+    wk_ref = _ref(wk_entries[0])
+
+    # Read current state via JS (no DOM mutation, so safe before act)
+    val = _js_eval(_WEEKENDS_STATE_JS)
+    try:
+        state = json.loads(val)
+        if state.get("found") and not state.get("checked"):
+            print("  ✓ 'Show weekends' already unchecked — nothing to do")
+            screenshot("gantt-weekends-done")
+            return
+    except Exception:
+        pass  # couldn't read state — click anyway
+
+    interceptor("act", wk_ref, wait_after=500)
+    print("  ✓ 'Show weekends' toggled — verify in Chrome that weekends are now hidden")
+    screenshot("gantt-weekends-done")
 
 
 # ---------------------------------------------------------------------------
-# Step 4 — Automations
+# Step 4 — Automations (guided: opens builder, pauses for manual completion)
 # ---------------------------------------------------------------------------
 
 AUTOMATIONS = [
     {
-        "name": "FAMILY / KIDS EVENTS — new task → Urgent",
-        "space": "family",
-        "url": f"{BASE_URL}/automations/{SPACE_IDS['family']}",
-        "description": "Trigger: Task created  |  Action: Set priority → Urgent",
+        "name":    "FAMILY / KIDS EVENTS — new task → Urgent priority",
+        "space":   "family",
+        "trigger": "Task created  (in KIDS EVENTS list)",
+        "action":  "Set priority → Urgent",
+        "url":     f"{BASE_URL}/automations/{SPACE_IDS['family']}",
     },
     {
-        "name": "CAREER / ACTIVE APPLICATIONS — Rejected → move to JD ARCHIVE",
-        "space": "career",
-        "url": f"{BASE_URL}/automations/{SPACE_IDS['career']}",
-        "description": "Trigger: Status changes to Rejected  |  Action: Move task → JD ARCHIVE",
+        "name":    "CAREER / ACTIVE APPLICATIONS — Rejected → move to JD ARCHIVE",
+        "space":   "career",
+        "trigger": "Status changes to Rejected",
+        "action":  "Move task → JD ARCHIVE list",
+        "url":     f"{BASE_URL}/automations/{SPACE_IDS['career']}",
     },
     {
-        "name": "PROJECTS / ACTIVE — Shipped → move to ARCHIVE",
-        "space": "projects",
-        "url": f"{BASE_URL}/automations/{SPACE_IDS['projects']}",
-        "description": "Trigger: Status changes to Shipped  |  Action: Move task → ARCHIVE",
+        "name":    "PROJECTS / ACTIVE — Shipped → move to ARCHIVE",
+        "space":   "projects",
+        "trigger": "Status changes to Shipped",
+        "action":  "Move task → ARCHIVE list",
+        "url":     f"{BASE_URL}/automations/{SPACE_IDS['projects']}",
     },
     {
-        "name": "INBOX / 03 TRIAGE — new task → assign to me",
-        "space": "inbox",
-        "url": f"{BASE_URL}/automations/{SPACE_IDS['inbox']}",
-        "description": "Trigger: Task created  |  Action: Assign task → me",
+        "name":    "INBOX / 03 TRIAGE — new task → assign to me",
+        "space":   "inbox",
+        "trigger": "Task created  (in 03 TRIAGE list)",
+        "action":  "Assign task → me",
+        "url":     f"{BASE_URL}/automations/{SPACE_IDS['inbox']}",
     },
 ]
 
 
-def _create_automation_ui(automation: dict) -> bool:
-    """
-    Navigate to the automation center for this space and create one automation.
-    ClickUp's automation builder is a heavily interactive modal — this attempts
-    the common flow but may need manual completion for complex rules.
-    """
-    navigate(automation["url"], wait_ms=3000)
-    wait_stable()
-
-    # Click "New Automation" or "Create Automation" button
-    new_ref = (
-        find_ref("New Automation", role="button")
-        or find_ref("Create Automation", role="button")
-        or find_ref("Add Automation", role="button")
-    )
-    if not new_ref:
-        # Some ClickUp versions show a "+" button
-        new_ref = find_ref("automation")
-        if not new_ref:
-            return False
-
-    interceptor("act", new_ref, wait_after=1500)
-    screenshot(f"automation-builder-{automation['space']}")
-    # The automation builder is deeply interactive (choose trigger → choose action → configure)
-    # Return False here to signal that manual completion is needed
-    return False
-
-
 def step_automations() -> None:
     print("\n── STEP 4: Automations ────────────────────────────────────────")
-    print("  Note: ClickUp's automation builder requires interactive multi-step")
-    print("  configuration. This step navigates to each space's automation center")
-    print("  and opens the builder. You complete the trigger + action selection.")
-    print()
+    print("  ClickUp automation builder requires interactive multi-step config.")
+    print("  This step opens each space's automation center; you complete each rule.\n")
 
-    for automation in AUTOMATIONS:
-        print(f"  {automation['name']}")
-        print(f"    {automation['description']}")
-        result = _create_automation_ui(automation)
-        if result:
-            print(f"    ✓ automation created")
+    for auto in AUTOMATIONS:
+        ok = navigate_and_verify(auto["url"], "Automat", auto["name"], wait_ms=3000)
+        if not ok:
+            print(f"    ✗ Navigation failed — visit manually: {auto['url']}")
+            print()
+            continue
+
+        # Try to click "New Automation" button
+        new_entries = _extract_refs(
+            interceptor("find", "New Automation", "--role", "button", wait_after=500)
+        )
+        if not new_entries:
+            new_entries = _extract_refs(
+                interceptor("find", "Create Automation", wait_after=300)
+            )
+
+        if new_entries:
+            interceptor("act", _ref(new_entries[0]), wait_after=1500)
+            print(f"    → Automation builder opened ({auto['space'].upper()} space)")
         else:
-            print(f"    → opened automation builder — complete manually in Chrome")
-            print(f"    → URL: {automation['url']}")
+            print(f"    ⚠ 'New Automation' not found — automation center open in Chrome")
+
+        screenshot(f"automation-{auto['space']}")
+
+        print(f"    Configure:")
+        print(f"      Trigger: {auto['trigger']}")
+        print(f"      Action:  {auto['action']}")
+        print(f"    Press Enter when done (or 's' to skip this one): ", end="", flush=True)
+        user_in = input().strip().lower()
+        if user_in in ("s", "skip"):
+            print(f"    → Skipped")
+        else:
+            print(f"    ✓ Marked complete")
         print()
 
-    print("  Manual automation checklist (if any above need completion):")
-    print()
-    for a in AUTOMATIONS:
-        print(f"  [ ] {a['name']}")
-        print(f"      {a['description']}")
-    print()
-    screenshot("automations-done")
+    print("  All automation centers visited.")
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Manual fallback messages
 # ---------------------------------------------------------------------------
 
-STEPS = {
-    "favorites":   step_favorites,
-    "template":    step_template,
-    "gantt":       step_gantt,
-    "automations": step_automations,
+_MANUAL_STEPS = {
+    "template": lambda extra: [
+        "WORK space → INTERNAL folder → Personal Ops list",
+        "Right-click 'Personal Ops' in the left sidebar",
+        "Click 'Save as Template'",
+        f"Enter name: '{extra}'",
+        "Click Save",
+    ],
+    "gantt": lambda _: [
+        "WORK space → ACTIVE ENGAGEMENTS folder",
+        "Click the Gantt view tab in the top bar",
+        "Click the gear/settings icon in the Gantt toolbar",
+        "Uncheck 'Show weekends'",
+    ],
 }
 
 
+def _print_manual(step: str, extra: str = "") -> None:
+    fn = _MANUAL_STEPS.get(step)
+    if fn:
+        print("  Manual steps:")
+        for line in fn(extra):
+            print(f"    • {line}")
+
+
+# ---------------------------------------------------------------------------
+# Connection check + main
+# ---------------------------------------------------------------------------
+
 def check_interceptor() -> bool:
-    """Verify interceptor is reachable and Chrome is running."""
     result = subprocess.run(
         [INTERCEPTOR_BIN, "status", "--json"],
-        capture_output=True, text=True, timeout=10
+        capture_output=True, text=True, timeout=10,
     )
     if result.returncode != 0:
         return False
@@ -517,25 +598,26 @@ def check_interceptor() -> bool:
         return "daemon: running" in result.stdout
 
 
+STEPS = {
+    "favorites":   step_favorites,
+    "template":    step_template,
+    "gantt":       step_gantt,
+    "automations": step_automations,
+}
+
+
 def main() -> None:
-    global DRY_RUN
+    global DRY_RUN, INTERCEPTOR_BIN
 
     parser = argparse.ArgumentParser(
         description="Automates ClickUp manual UI setup steps via interceptor."
     )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Print actions without executing them"
-    )
-    parser.add_argument(
-        "--step", choices=list(STEPS.keys()),
-        help="Run only one step (default: run all in order)"
-    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--step", choices=list(STEPS.keys()))
     args = parser.parse_args()
 
     DRY_RUN = args.dry_run
 
-    global INTERCEPTOR_BIN
     try:
         INTERCEPTOR_BIN = _resolve_interceptor()
     except FileNotFoundError as e:
@@ -547,31 +629,24 @@ def main() -> None:
     else:
         print("Checking interceptor + Chrome connection...")
         if not check_interceptor():
-            print("✗ Could not connect to interceptor. Make sure:")
+            print("✗ Could not connect. Make sure:")
             print("  1. Chrome is running")
             print("  2. Interceptor extension is loaded (chrome://extensions)")
-            print("  3. interceptor binary is in PATH")
-            print("  4. interceptor-daemon is running (starts automatically on first command)")
+            print("  3. interceptor-daemon running (auto-starts on first use)")
             sys.exit(1)
         print("✓ Connected\n")
 
     steps_to_run = [args.step] if args.step else list(STEPS.keys())
-    print(f"Running steps: {', '.join(steps_to_run)}\n")
+    print(f"Running: {', '.join(steps_to_run)}\n")
 
     for step_name in steps_to_run:
         try:
             STEPS[step_name]()
         except Exception as e:
-            print(f"\n✗ Step '{step_name}' failed: {e}")
-            print("  Continuing with next step...\n")
+            print(f"\n✗ Step '{step_name}' raised: {e}")
 
     print("\n────────────────────────────────────────────────────────────────")
     print("setup_ui.py complete.")
-    print()
-    print("Manual steps that always require human interaction:")
-    print("  • Automations: use ClickUp UI to configure trigger + action per rule")
-    print("  • Gantt preferences (show/hide weekends) are per-user, not per-workspace")
-    print("  • Template configuration: verify column setup before saving")
 
 
 if __name__ == "__main__":
