@@ -295,6 +295,10 @@ def _favorite_action() -> str:
       3. eval --main: check 'Favorites' item in overlay, click if not already selected
          → zero interceptor reads between step 1 and step 3
     """
+    # Angular takes ~10s from navigate to render the view header buttons.
+    # navigate_and_verify waits ~7s total; we need ~3s more here before eval.
+    time.sleep(3.0)
+
     # Step 1: click the Favorite button via JS event dispatch
     click_val = _js_eval(_CLICK_FAVORITE_BTN_JS)
     if '"error"' in click_val:
@@ -689,9 +693,10 @@ def main() -> None:
             print("  3. interceptor-daemon running (auto-starts on first use)")
             sys.exit(1)
         print("✓ Connected")
-        # Bring Chrome to the foreground once. All subsequent navigations reuse this tab.
+        # Open one stable ClickUp tab. Omit --no-wait so the content script is
+        # fully initialized before we start navigating — eval reliability depends on this.
         print("  Activating Chrome tab...")
-        interceptor("open", BASE_URL, "--activate", "--no-wait", wait_after=1500)
+        interceptor("open", BASE_URL, "--activate", wait_after=1000)
         print()
 
     steps_to_run = [args.step] if args.step else list(STEPS.keys())
