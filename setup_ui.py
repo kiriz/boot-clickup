@@ -278,10 +278,10 @@ def _favorite_action() -> str:
         print(f"    ⚠ star button has no ref: {entries[1]}")
         return "failed"
 
-    # Open the favorites dropdown via native accessibility event
-    act_result = interceptor("act", star_ref, wait_after=500)
-    if act_result.get("error"):  # ignore error: null (always present in act response)
-        print(f"    ⚠ act failed: {act_result.get('error', '')[:80]}")
+    # Click the star button to open the favorites dropdown
+    click_result = interceptor("click", star_ref, wait_after=500)
+    if click_result.get("error"):
+        print(f"    ⚠ click failed: {click_result.get('error', '')[:80]}")
         return "failed"
 
     # IMMEDIATELY check + click inside CDK overlay — zero interceptor reads between act and eval
@@ -383,7 +383,7 @@ def step_template() -> None:
         _print_manual("template", template_name)
         return
 
-    interceptor("act", _ref(tmpl_entries[0]), wait_after=1500)
+    interceptor("click",_ref(tmpl_entries[0]), wait_after=1500)
     screenshot("template-dialog")
 
     # Find the template name input
@@ -395,7 +395,7 @@ def step_template() -> None:
 
     if input_entries:
         input_ref = _ref(input_entries[0])
-        interceptor("act", input_ref, wait_after=300)
+        interceptor("click",input_ref, wait_after=300)
         interceptor("keys", "Control+a", wait_after=200)
         interceptor("type", input_ref, template_name, wait_after=500)
 
@@ -407,7 +407,7 @@ def step_template() -> None:
         save_entries = _extract_refs(find_save)
 
     if save_entries:
-        interceptor("act", _ref(save_entries[0]), wait_after=1000)
+        interceptor("click",_ref(save_entries[0]), wait_after=1000)
         print(f"  ✓ Template '{template_name}' save attempted")
         screenshot("template-saved")
     else:
@@ -453,7 +453,7 @@ def step_gantt() -> None:
     # Find and click Gantt view tab
     gantt_entries = _extract_refs(interceptor("find", "Gantt", wait_after=500))
     if gantt_entries:
-        interceptor("act", _ref(gantt_entries[0]), wait_after=2500)
+        interceptor("click",_ref(gantt_entries[0]), wait_after=2500)
         screenshot("gantt-view")
     else:
         print("  ⚠ Gantt tab not found — trying direct URL")
@@ -469,7 +469,7 @@ def step_gantt() -> None:
         return
 
     # Open settings panel
-    interceptor("act", _ref(settings_entries[0]), wait_after=1000)
+    interceptor("click",_ref(settings_entries[0]), wait_after=1000)
     screenshot("gantt-settings")
 
     # Find weekends toggle — collect ref BEFORE reading its state
@@ -494,7 +494,7 @@ def step_gantt() -> None:
     except Exception:
         pass  # couldn't read state — click anyway
 
-    interceptor("act", wk_ref, wait_after=500)
+    interceptor("click",wk_ref, wait_after=500)
     print("  ✓ 'Show weekends' toggled — verify in Chrome that weekends are now hidden")
     screenshot("gantt-weekends-done")
 
@@ -557,7 +557,7 @@ def step_automations() -> None:
             )
 
         if new_entries:
-            interceptor("act", _ref(new_entries[0]), wait_after=1500)
+            interceptor("click",_ref(new_entries[0]), wait_after=1500)
             print(f"    → Automation builder opened ({auto['space'].upper()} space)")
         else:
             print(f"    ⚠ 'New Automation' not found — automation center open in Chrome")
