@@ -642,6 +642,30 @@ def _print_manual(step: str, extra: str = "") -> None:
 # Connection check + main
 # ---------------------------------------------------------------------------
 
+def _cleanup_clickup_tabs() -> None:
+    """Close all existing ClickUp tabs to avoid routing conflicts from duplicate URLs."""
+    result = subprocess.run(
+        [INTERCEPTOR_BIN, "tabs", "--json"],
+        capture_output=True, text=True,
+    )
+    try:
+        raw = json.loads(result.stdout)
+        tabs = raw.get("data", []) if isinstance(raw.get("data"), list) else []
+    except (json.JSONDecodeError, AttributeError):
+        return
+    clickup_tabs = [t for t in tabs if "app.clickup.com" in t.get("url", "")]
+    if clickup_tabs:
+        print(f"  Closing {len(clickup_tabs)} existing ClickUp tab(s)...")
+        for tab in clickup_tabs:
+            tid = tab.get("id")
+            if tid:
+                subprocess.run(
+                    [INTERCEPTOR_BIN, "tab", "close", str(tid), "--json"],
+                    capture_output=True, text=True,
+                )
+                time.sleep(0.2)
+
+
 def check_interceptor() -> bool:
     result = subprocess.run(
         [INTERCEPTOR_BIN, "status", "--json"],
@@ -693,9 +717,11 @@ def main() -> None:
             print("  3. interceptor-daemon running (auto-starts on first use)")
             sys.exit(1)
         print("✓ Connected")
+        # Close any stale ClickUp tabs first — duplicate URLs confuse interceptor routing.
+        _cleanup_clickup_tabs()
         # Open one stable ClickUp tab. Omit --no-wait so the content script is
         # fully initialized before we start navigating — eval reliability depends on this.
-        print("  Activating Chrome tab...")
+        print("  Opening fresh ClickUp tab...")
         interceptor("open", BASE_URL, "--activate", wait_after=1000)
         print()
 
