@@ -148,11 +148,14 @@ def _js_eval(code: str) -> str:
         capture_output=True, text=True,
         timeout=20,
     )
-    print(f"    [dbg] eval rc={result.returncode} stdout={repr(result.stdout[:120])} stderr={repr(result.stderr[:80])}")
     try:
         data = json.loads(result.stdout)
-        val = data.get("value", "")
-        return str(val) if val is not None else ""
+        if "value" in data:
+            # Enveloped format: {"value": "...", "cspBypassApplied": true, ...}
+            val = data["value"]
+            return str(val) if val is not None else ""
+        # Raw format: eval returned an object directly (no envelope key)
+        return result.stdout.strip()
     except (json.JSONDecodeError, AttributeError):
         return result.stdout.strip()
 
@@ -210,7 +213,7 @@ def _list_url(list_id: str) -> str:
 
 
 def _folder_url(folder_id: str) -> str:
-    return f"{BASE_URL}/v/f/li/{folder_id}"
+    return f"{BASE_URL}/v/f/{folder_id}"
 
 
 # ---------------------------------------------------------------------------
