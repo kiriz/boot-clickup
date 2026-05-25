@@ -146,7 +146,9 @@ def _js_eval(code: str) -> str:
     result = subprocess.run(
         [INTERCEPTOR_BIN, "eval", code, "--main"],
         capture_output=True, text=True,
+        timeout=20,
     )
+    print(f"    [dbg] eval rc={result.returncode} stdout={repr(result.stdout[:120])} stderr={repr(result.stderr[:80])}")
     try:
         data = json.loads(result.stdout)
         val = data.get("value", "")
@@ -230,20 +232,38 @@ FAVORITES = [
 # dispatching a full mouse event sequence via JS does.
 _CLICK_FAVORITE_BTN_JS = r"""
 (function() {
-    var btn = Array.from(document.querySelectorAll('button')).find(
-        function(b) { return b.textContent.trim().toLowerCase().indexOf('favor') >= 0; }
-    );
-    if (!btn) return JSON.stringify({error: 'no-favorite-button'});
-    var text = btn.textContent.trim().toLowerCase();
-    if (text.indexOf('remove') >= 0) {
-        return JSON.stringify({error: 'already-favorited', text: btn.textContent.trim().slice(0,60)});
+    // The view-header Favorites button has aria-label "Open Favorites menu".
+    // The sidebar "Favorites" section header uses class "expand-button" — exclude it.
+    var allBtns = Array.from(document.querySelectorAll('button,[role="button"]'));
+
+    // Priority 1: aria-label contains "favorites" (the view header star button)
+    var btn = allBtns.find(function(b) {
+        var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+        return lbl.indexOf('favorites') >= 0 && !b.classList.contains('expand-button');
+    });
+
+    // Priority 2: textContent contains "favor" but not the sidebar expand-button
+    if (!btn) {
+        btn = allBtns.find(function(b) {
+            return b.textContent.trim().toLowerCase().indexOf('favor') >= 0
+                && !b.classList.contains('expand-button');
+        });
     }
+
+    if (!btn) return JSON.stringify({error: 'no-favorite-button'});
+
+    var ariaLabel = btn.getAttribute('aria-label') || '';
+    if (ariaLabel.toLowerCase().indexOf('remove') >= 0
+            || btn.getAttribute('aria-pressed') === 'true') {
+        return JSON.stringify({error: 'already-favorited', label: ariaLabel.slice(0,60)});
+    }
+
     var rect = btn.getBoundingClientRect();
     var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
     ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
         btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
     });
-    return JSON.stringify({clicked: true, text: btn.textContent.trim().slice(0,60), cls: btn.className.slice(0,80)});
+    return JSON.stringify({clicked: true, text: btn.textContent.trim().slice(0,40), cls: btn.className.slice(0,80), ariaLabel: ariaLabel});
 })()
 """
 
@@ -306,7 +326,7 @@ def _favorite_action() -> str:
             info = json.loads(click_val)
             err = info.get('error', '?')
             if err == 'already-favorited':
-                print(f"    ⚠ button says '{info.get('text','')}' — already in Favorites")
+                print(f"    ⚠ button says '{info.get('label', info.get('text',''))}' — already in Favorites")
                 return "already_favorite"
             print(f"    ⚠ {err}")
         except Exception:
