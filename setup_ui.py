@@ -442,28 +442,11 @@ def step_template() -> None:
         return
     time.sleep(1.5)
 
-    # Step 2: click the Templates submenu item to expand it
-    val2 = _js_eval(r"""
-(function(){
-    var overlay=document.querySelector('.cdk-overlay-container');
-    if(!overlay)return JSON.stringify({error:'no-overlay'});
-    var items=Array.from(overlay.querySelectorAll('[class*="menu-item"],[role="menuitem"],li'));
-    var t=items.find(function(i){return i.textContent.trim()==='Templates';});
-    if(!t)return JSON.stringify({error:'no-templates-item',count:items.length});
-    t.click();
-    return JSON.stringify({clicked:true});
-})()
-""")
+    # Step 2: click "Save as template" — it's pre-rendered in the context menu DOM
+    # (the submenu items exist as hidden <a> elements; no hover/expand needed)
+    val2 = _js_eval(_CLICK_SAVE_AS_TEMPLATE_JS)
     if '"error"' in val2:
-        print(f"  ✗ Templates menu item not found: {val2[:60]}")
-        _print_manual("template", template_name)
-        return
-    time.sleep(1.0)
-
-    # Step 3: click "Save as template" in the submenu
-    val3 = _js_eval(_CLICK_SAVE_AS_TEMPLATE_JS)
-    if '"error"' in val3:
-        print(f"  ✗ 'Save as template' not in submenu: {val3[:60]}")
+        print(f"  ✗ 'Save as template' not found in context menu: {val2[:60]}")
         _print_manual("template", template_name)
         return
     time.sleep(1.5)
