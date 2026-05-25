@@ -166,8 +166,9 @@ def _ref(entry: dict) -> Optional[str]:
 
 
 def _page_text() -> str:
-    """Read visible text from the current tab. wait-stable lets SPA routing settle first."""
-    interceptor("wait-stable", "--ms", "2000", "--timeout", "10000", wait_after=0)
+    """Read visible text from the current tab. Plain sleep avoids wait-stable daemon issue."""
+    # wait-stable blocks subsequent eval --main calls — use timed sleep instead
+    time.sleep(2.5)
     return interceptor("read", wait_after=400).get("text", "")
 
 
@@ -230,15 +231,19 @@ FAVORITES = [
 _CLICK_FAVORITE_BTN_JS = r"""
 (function() {
     var btn = Array.from(document.querySelectorAll('button')).find(
-        function(b) { return b.textContent.trim() === 'Favorite'; }
+        function(b) { return b.textContent.trim().toLowerCase().indexOf('favor') >= 0; }
     );
     if (!btn) return JSON.stringify({error: 'no-favorite-button'});
+    var text = btn.textContent.trim().toLowerCase();
+    if (text.indexOf('remove') >= 0) {
+        return JSON.stringify({error: 'already-favorited', text: btn.textContent.trim().slice(0,60)});
+    }
     var rect = btn.getBoundingClientRect();
     var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
     ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
         btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
     });
-    return JSON.stringify({clicked: true, cls: btn.className.slice(0,80)});
+    return JSON.stringify({clicked: true, text: btn.textContent.trim().slice(0,60), cls: btn.className.slice(0,80)});
 })()
 """
 
@@ -294,7 +299,12 @@ def _favorite_action() -> str:
     click_val = _js_eval(_CLICK_FAVORITE_BTN_JS)
     if '"error"' in click_val:
         try:
-            print(f"    ⚠ {json.loads(click_val).get('error','?')}")
+            info = json.loads(click_val)
+            err = info.get('error', '?')
+            if err == 'already-favorited':
+                print(f"    ⚠ button says '{info.get('text','')}' — already in Favorites")
+                return "already_favorite"
+            print(f"    ⚠ {err}")
         except Exception:
             print(f"    ⚠ click JS: {click_val[:80]}")
         return "failed"
