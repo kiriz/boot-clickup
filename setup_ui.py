@@ -547,6 +547,37 @@ _WEEKENDS_STATE_JS = r"""
 })()
 """
 
+# Clicks the weekends toggle directly via JS — used when a11y tree can't find it.
+_WEEKENDS_CLICK_JS = r"""
+(function() {
+    // Find label element with "weekend" text
+    var allEls = Array.from(document.querySelectorAll('*'));
+    var weekendLabel = allEls.find(function(el) {
+        return el.childElementCount === 0
+            && el.textContent.trim().toLowerCase() === 'show weekends';
+    }) || allEls.find(function(el) {
+        return el.childElementCount === 0
+            && el.textContent.trim().toLowerCase().indexOf('weekend') >= 0;
+    });
+    if (!weekendLabel) return JSON.stringify({error: 'label-not-found'});
+
+    // Walk up to find the row container, then find the toggle within it
+    var row = weekendLabel.closest('[class*="setting"],[class*="toggle-row"],[class*="option"],[class*="row"]');
+    if (row) {
+        var chk = row.querySelector('input,[role="checkbox"],[role="switch"],[class*="toggle"],[class*="switch"]');
+        if (chk) {
+            chk.click();
+            return JSON.stringify({clicked: true, method: 'child-toggle'});
+        }
+        row.click();
+        return JSON.stringify({clicked: true, method: 'row-click'});
+    }
+    // Last resort: click the label itself (some toggle rows use the label as the click target)
+    weekendLabel.click();
+    return JSON.stringify({clicked: true, method: 'label-click'});
+})()
+"""
+
 
 def step_gantt() -> None:
     print("\n── STEP 3: Gantt — hide weekends ──────────────────────────────")
@@ -584,26 +615,31 @@ def step_gantt() -> None:
     wk_entries = _extract_refs(interceptor("find", "Show weekends", wait_after=500))
     if not wk_entries:
         wk_entries = _extract_refs(interceptor("find", "Weekends", wait_after=500))
-    if not wk_entries:
-        print("  ✗ 'Show weekends' toggle not found")
-        _print_manual("gantt")
-        return
 
-    wk_ref = _ref(wk_entries[0])
-
-    # Read current state via JS (no DOM mutation, so safe before act)
-    val = _js_eval(_WEEKENDS_STATE_JS)
-    try:
-        state = json.loads(val)
-        if state.get("found") and not state.get("checked"):
-            print("  ✓ 'Show weekends' already unchecked — nothing to do")
-            screenshot("gantt-weekends-done")
+    if wk_entries:
+        wk_ref = _ref(wk_entries[0])
+        # Read current state via JS (no DOM mutation, so safe before act)
+        val = _js_eval(_WEEKENDS_STATE_JS)
+        try:
+            state = json.loads(val)
+            if state.get("found") and not state.get("checked"):
+                print("  ✓ 'Show weekends' already unchecked — nothing to do")
+                screenshot("gantt-weekends-done")
+                return
+        except Exception:
+            pass  # couldn't read state — click anyway
+        interceptor("click", wk_ref, wait_after=500)
+        print("  ✓ 'Show weekends' toggled via a11y ref")
+    else:
+        # Toggle not in a11y tree — fall back to JS
+        val = _js_eval(_WEEKENDS_CLICK_JS)
+        if '"clicked":true' in val:
+            print(f"  ✓ 'Show weekends' toggled via JS")
+        else:
+            print(f"  ✗ 'Show weekends' toggle not found: {val[:80]}")
+            _print_manual("gantt")
             return
-    except Exception:
-        pass  # couldn't read state — click anyway
 
-    interceptor("click",wk_ref, wait_after=500)
-    print("  ✓ 'Show weekends' toggled — verify in Chrome that weekends are now hidden")
     screenshot("gantt-weekends-done")
 
 
