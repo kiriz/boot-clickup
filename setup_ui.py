@@ -27,7 +27,6 @@ Usage:
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -225,17 +224,39 @@ FAVORITES = [
     ("CAREER → ACTIVE APPLICATIONS",  "list",   LIST_IDS["active_applications"], "ACTIVE APPLICATIONS"),
 ]
 
-# JS run immediately after `act <star_ref>` opens the CDK dropdown.
-# Checks if already favorited; clicks if not; closes if already selected.
-# Returns JSON string with {status} or {error}.
-_FAVORITE_JS = r"""
+# Step 1: Click the "Favorite" button in the view header using JS dispatchEvent.
+# interceptor click doesn't trigger Angular CDK's event listeners reliably;
+# dispatching a full mouse event sequence via JS does.
+_CLICK_FAVORITE_BTN_JS = r"""
+(function() {
+    var btn = Array.from(document.querySelectorAll('button')).find(
+        function(b) { return b.textContent.trim() === 'Favorite'; }
+    );
+    if (!btn) return JSON.stringify({error: 'no-favorite-button'});
+    var rect = btn.getBoundingClientRect();
+    var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+    ['mouseenter','mouseover','mousedown','mouseup','click'].forEach(function(t) {
+        btn.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true, clientX:cx, clientY:cy, view:window}));
+    });
+    return JSON.stringify({clicked: true, cls: btn.className.slice(0,80)});
+})()
+"""
+
+# Step 2 (run after Python time.sleep(2.0) for Angular to render the CDK overlay):
+# Check if "Favorites" section is already selected; click it if not.
+# Selectors confirmed via live DOM inspection: button/[role=menuitem]/[class*=menu-item]
+# finds 6 items including "Favorites" in the cu-nav-menu-move-to-section dropdown.
+_FAVORITE_CHECK_JS = r"""
 (function() {
     var overlay = document.querySelector('.cdk-overlay-container');
     if (!overlay) return JSON.stringify({error: 'no-overlay'});
     var items = Array.from(
-        overlay.querySelectorAll('[class*="cu3-menu-item"],[role="menuitem"],[class*="cdk-menu-item"]')
+        overlay.querySelectorAll('button,[role="menuitem"],[class*="menu-item"],[class*="cu3-menu-item"]')
     );
-    if (!items.length) return JSON.stringify({error: 'no-menu-items'});
+    if (!items.length) return JSON.stringify({
+        error: 'no-menu-items',
+        html: overlay.innerHTML.slice(0, 300)
+    });
     var favItem = items.find(function(i) { return i.textContent.trim() === 'Favorites'; });
     if (!favItem) {
         return JSON.stringify({
@@ -255,26 +276,6 @@ _FAVORITE_JS = r"""
 """
 
 
-def _header_dropdown_refs() -> list:
-    """
-    Read the a11y tree and return document refs for 'Dropdown menu' buttons
-    in the page header (before the Sidebar navigation section).
-
-    `find` results use their own refId indexing (e1, e2 = first/second result),
-    NOT the document element refs. We must parse the tree from `read` to get
-    the actual document refs (e6, e8, etc.) that `click` understands.
-    """
-    tree = interceptor("read", wait_after=400).get("tree", "")
-    refs = []
-    for line in tree.split("\n"):
-        # Stop at the sidebar — only want header buttons
-        if re.match(r'\s*navigation\b', line):
-            break
-        m = re.search(r'\[(e\d+)\].*?Dropdown menu', line)
-        if m:
-            refs.append(m.group(1))
-    return refs
-
 
 def _favorite_action() -> str:
     """
@@ -282,47 +283,39 @@ def _favorite_action() -> str:
     Returns: 'already_favorite' | 'added' | 'failed'
 
     Pattern:
-      1. read tree → parse header 'Dropdown menu' refs (actual doc refs, not find-result ids)
-      2. click <star_ref>  (index 1 = star button)  →  opens CDK overlay
-      3. time.sleep(1s)   →  let Angular render overlay items (NOT an interceptor call)
-      4. eval --main      →  check + click, zero interceptor reads between 2 and 4
+      1. eval --main: JS dispatchEvent on the 'Favorite' button (text-match, no tree ref)
+         → interceptor click doesn't trigger Angular CDK event listeners reliably
+      2. time.sleep(2.0): let Angular render the CDK overlay (NOT an interceptor call)
+         → overlay exists immediately after click but items render async
+      3. eval --main: check 'Favorites' item in overlay, click if not already selected
+         → zero interceptor reads between step 1 and step 3
     """
-    refs = _header_dropdown_refs()
-    if len(refs) < 2:
-        print(f"    ⚠ found {len(refs)} header 'Dropdown menu' refs — expected ≥2 (tree: {refs})")
+    # Step 1: click the Favorite button via JS event dispatch
+    click_val = _js_eval(_CLICK_FAVORITE_BTN_JS)
+    if '"error"' in click_val:
+        try:
+            print(f"    ⚠ {json.loads(click_val).get('error','?')}")
+        except Exception:
+            print(f"    ⚠ click JS: {click_val[:80]}")
         return "failed"
 
-    # refs[0] = location picker, refs[1] = star/favorites button
-    star_ref = refs[1]
+    # Step 2: Python sleep (no interceptor calls) — let Angular render dropdown items
+    time.sleep(2.0)
 
-    # Click the star button to open the favorites CDK dropdown
-    click_result = interceptor("click", star_ref, wait_after=0)
-    if click_result.get("error"):
-        print(f"    ⚠ click failed: {click_result.get('error', '')[:80]}")
-        return "failed"
-
-    # Sleep (NOT an interceptor call) to let Angular render the dropdown items
-    time.sleep(1.2)
-
-    # Check + click inside CDK overlay — zero interceptor reads between click and eval
-    val = _js_eval(_FAVORITE_JS)
-    time.sleep(0.4)
+    # Step 3: check + click the Favorites section item
+    val = _js_eval(_FAVORITE_CHECK_JS)
+    time.sleep(0.3)
 
     if '"status":"already_favorite"' in val:
         return "already_favorite"
     if '"status":"added"' in val:
         return "added"
 
-    # Extract error info — dump overlay HTML so we can see what's actually there
     try:
         info = json.loads(val)
-        err = info.get('error', '?')
-        print(f"    ⚠ overlay: {err} — {info.get('available','')[:80]}")
-        if err in ('no-menu-items', 'no-overlay'):
-            html = _js_eval("(function(){var o=document.querySelector('.cdk-overlay-container');return o?o.innerHTML.slice(0,400):'no-overlay';})()")
-            print(f"    ⚠ overlay HTML: {html[:200]}")
+        print(f"    ⚠ overlay: {info.get('error','?')} — {info.get('available', info.get('html',''))[:100]}")
     except Exception:
-        print(f"    ⚠ unexpected overlay response: {repr(val[:150])}")
+        print(f"    ⚠ unexpected: {repr(val[:120])}")
     return "failed"
 
 
