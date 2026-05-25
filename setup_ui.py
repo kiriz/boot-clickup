@@ -162,7 +162,7 @@ def _extract_refs(find_result: dict) -> list:
 
 
 def _ref(entry: dict) -> Optional[str]:
-    return entry.get("ref") or entry.get("index")
+    return entry.get("refId") or entry.get("ref") or entry.get("index")
 
 
 def _page_text() -> str:
