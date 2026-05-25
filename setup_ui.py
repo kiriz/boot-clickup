@@ -409,12 +409,31 @@ _CONTEXTMENU_JS = r"""
 })()
 """
 
+_HOVER_TEMPLATES_JS = r"""
+(function() {
+    var overlay = document.querySelector('.cdk-overlay-container');
+    if (!overlay) return JSON.stringify({error: 'no-overlay'});
+    var items = Array.from(overlay.querySelectorAll('[class*="menu-item"],[role="menuitem"],li,a'));
+    var t = items.find(function(i) { return i.textContent.trim() === 'Templates'; });
+    if (!t) return JSON.stringify({error: 'no-templates-item', count: items.length});
+    ['mouseenter','mouseover','focus'].forEach(function(e) {
+        t.dispatchEvent(new MouseEvent(e, {bubbles: true, cancelable: true, view: window}));
+    });
+    t.click();
+    return JSON.stringify({hovered: true});
+})()
+"""
+
 _CLICK_SAVE_AS_TEMPLATE_JS = r"""
 (function() {
-    var allEls = Array.from(document.querySelectorAll('button,a,[role="menuitem"],li'));
-    var btn = allEls.find(function(el) {
-        return el.textContent.trim().toLowerCase() === 'save as template';
-    });
+    // Try class selector first (most reliable)
+    var btn = document.querySelector('.nav-menu-item_save-as-template');
+    if (!btn) {
+        // Fallback: text search across all elements
+        btn = Array.from(document.querySelectorAll('button,a,[role="menuitem"],li')).find(function(el) {
+            return el.textContent.trim().toLowerCase() === 'save as template';
+        });
+    }
     if (!btn) return JSON.stringify({error: 'not-found'});
     btn.click();
     return JSON.stringify({clicked: true, cls: btn.className.slice(0, 60)});
@@ -442,8 +461,13 @@ def step_template() -> None:
         return
     time.sleep(1.5)
 
-    # Step 2: click "Save as template" — it's pre-rendered in the context menu DOM
-    # (the submenu items exist as hidden <a> elements; no hover/expand needed)
+    # Step 2: hover "Templates" in the context menu to expand the submenu
+    hover_val = _js_eval(_HOVER_TEMPLATES_JS)
+    if '"error"' in hover_val:
+        print(f"  ⚠ Templates hover: {hover_val[:60]} — trying save-as-template directly")
+    time.sleep(1.0)
+
+    # Step 3: click "Save as template" in the submenu
     val2 = _js_eval(_CLICK_SAVE_AS_TEMPLATE_JS)
     if '"error"' in val2:
         print(f"  ✗ 'Save as template' not found in context menu: {val2[:60]}")
