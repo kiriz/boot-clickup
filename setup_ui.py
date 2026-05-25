@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -254,37 +255,56 @@ _FAVORITE_JS = r"""
 """
 
 
+def _header_dropdown_refs() -> list:
+    """
+    Read the a11y tree and return document refs for 'Dropdown menu' buttons
+    in the page header (before the Sidebar navigation section).
+
+    `find` results use their own refId indexing (e1, e2 = first/second result),
+    NOT the document element refs. We must parse the tree from `read` to get
+    the actual document refs (e6, e8, etc.) that `click` understands.
+    """
+    tree = interceptor("read", wait_after=400).get("tree", "")
+    refs = []
+    for line in tree.split("\n"):
+        # Stop at the sidebar — only want header buttons
+        if re.match(r'\s*navigation\b', line):
+            break
+        m = re.search(r'\[(e\d+)\].*?Dropdown menu', line)
+        if m:
+            refs.append(m.group(1))
+    return refs
+
+
 def _favorite_action() -> str:
     """
     Detect and toggle Favorites for the currently-open list/folder.
     Returns: 'already_favorite' | 'added' | 'failed'
 
     Pattern:
-      1. find "Dropdown menu" --role button  →  collect star button ref (index 1)
-      2. act <star_ref>                      →  opens CDK overlay
-      3. eval --main (immediately)           →  check + click, NO reads between 2 and 3
+      1. read tree → parse header 'Dropdown menu' refs (actual doc refs, not find-result ids)
+      2. click <star_ref>  (index 1 = star button)  →  opens CDK overlay
+      3. time.sleep(1s)   →  let Angular render overlay items (NOT an interceptor call)
+      4. eval --main      →  check + click, zero interceptor reads between 2 and 4
     """
-    # Collect star button ref via semantic find.
-    # find triggers wait_stable — fine here, no overlay is open yet.
-    find_data = interceptor("find", "Dropdown menu", "--role", "button", wait_after=600)
-    entries = _extract_refs(find_data)
-    if len(entries) < 2:
-        print(f"    ⚠ found {len(entries)} 'Dropdown menu' buttons — expected ≥2")
+    refs = _header_dropdown_refs()
+    if len(refs) < 2:
+        print(f"    ⚠ found {len(refs)} header 'Dropdown menu' refs — expected ≥2 (tree: {refs})")
         return "failed"
 
-    # Index 0 = location/hierarchy picker, index 1 = star/favorites button
-    star_ref = _ref(entries[1])
-    if not star_ref:
-        print(f"    ⚠ star button has no ref: {entries[1]}")
-        return "failed"
+    # refs[0] = location picker, refs[1] = star/favorites button
+    star_ref = refs[1]
 
-    # Click the star button to open the favorites dropdown
-    click_result = interceptor("click", star_ref, wait_after=500)
+    # Click the star button to open the favorites CDK dropdown
+    click_result = interceptor("click", star_ref, wait_after=0)
     if click_result.get("error"):
         print(f"    ⚠ click failed: {click_result.get('error', '')[:80]}")
         return "failed"
 
-    # IMMEDIATELY check + click inside CDK overlay — zero interceptor reads between act and eval
+    # Sleep (NOT an interceptor call) to let Angular render the dropdown items
+    time.sleep(1.2)
+
+    # Check + click inside CDK overlay — zero interceptor reads between click and eval
     val = _js_eval(_FAVORITE_JS)
     time.sleep(0.4)
 
@@ -293,12 +313,16 @@ def _favorite_action() -> str:
     if '"status":"added"' in val:
         return "added"
 
-    # Extract error info for debugging
+    # Extract error info — dump overlay HTML so we can see what's actually there
     try:
         info = json.loads(val)
-        print(f"    ⚠ overlay: {info.get('error','?')} — {info.get('available','')[:80]}")
+        err = info.get('error', '?')
+        print(f"    ⚠ overlay: {err} — {info.get('available','')[:80]}")
+        if err in ('no-menu-items', 'no-overlay'):
+            html = _js_eval("(function(){var o=document.querySelector('.cdk-overlay-container');return o?o.innerHTML.slice(0,400):'no-overlay';})()")
+            print(f"    ⚠ overlay HTML: {html[:200]}")
     except Exception:
-        print(f"    ⚠ unexpected overlay response: {val[:100]}")
+        print(f"    ⚠ unexpected overlay response: {repr(val[:150])}")
     return "failed"
 
 
