@@ -392,6 +392,36 @@ def step_favorites() -> None:
 # Step 2 — Save list template
 # ---------------------------------------------------------------------------
 
+_CONTEXTMENU_JS = r"""
+(function() {
+    var els = Array.from(document.querySelectorAll('*')).filter(function(el) {
+        return el.childElementCount === 0 && el.textContent.trim() === 'Personal Ops';
+    });
+    if (!els.length) return JSON.stringify({error: 'not-found'});
+    var el = els[0];
+    var rect = el.getBoundingClientRect();
+    var cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    el.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: cx, clientY: cy,
+        button: 2, buttons: 2, view: window
+    }));
+    return JSON.stringify({ok: true, x: Math.round(cx), y: Math.round(cy)});
+})()
+"""
+
+_CLICK_SAVE_AS_TEMPLATE_JS = r"""
+(function() {
+    var allEls = Array.from(document.querySelectorAll('button,a,[role="menuitem"],li'));
+    var btn = allEls.find(function(el) {
+        return el.textContent.trim().toLowerCase() === 'save as template';
+    });
+    if (!btn) return JSON.stringify({error: 'not-found'});
+    btn.click();
+    return JSON.stringify({clicked: true, cls: btn.className.slice(0, 60)});
+})()
+"""
+
+
 def step_template() -> None:
     print("\n── STEP 2: Save list template ─────────────────────────────────")
     template_name = "PAI Standard Work List"
@@ -401,72 +431,89 @@ def step_template() -> None:
         _print_manual("template", template_name)
         return
 
-    screenshot("template-before")
+    # Extra wait for Angular to render the sidebar list items
+    time.sleep(3.0)
 
-    # Find "Personal Ops" in the a11y tree (sidebar item)
-    find_data = interceptor("find", "Personal Ops", wait_after=500)
-    entries = _extract_refs(find_data)
-    if not entries:
-        print("  ✗ Could not find 'Personal Ops' in a11y tree")
+    # Step 1: right-click Personal Ops via JS contextmenu event (not in a11y tree)
+    val = _js_eval(_CONTEXTMENU_JS)
+    if '"error"' in val:
+        print(f"  ✗ Personal Ops not found in DOM")
         _print_manual("template", template_name)
         return
+    time.sleep(1.5)
 
-    # Prefer a sidebar/nav item role over the page heading
-    ref = None
-    for e in entries:
-        if e.get("role", "") in ("treeitem", "menuitem", "link", "listitem"):
-            ref = _ref(e)
-            break
-    if not ref:
-        ref = _ref(entries[0])
-
-    if not ref:
-        print("  ✗ Could not extract ref for 'Personal Ops'")
+    # Step 2: click the Templates submenu item to expand it
+    val2 = _js_eval(r"""
+(function(){
+    var overlay=document.querySelector('.cdk-overlay-container');
+    if(!overlay)return JSON.stringify({error:'no-overlay'});
+    var items=Array.from(overlay.querySelectorAll('[class*="menu-item"],[role="menuitem"],li'));
+    var t=items.find(function(i){return i.textContent.trim()==='Templates';});
+    if(!t)return JSON.stringify({error:'no-templates-item',count:items.length});
+    t.click();
+    return JSON.stringify({clicked:true});
+})()
+""")
+    if '"error"' in val2:
+        print(f"  ✗ Templates menu item not found: {val2[:60]}")
         _print_manual("template", template_name)
         return
+    time.sleep(1.0)
 
-    # Right-click to open context menu
-    interceptor("rightclick", ref, wait_after=1000)
-    screenshot("template-context-menu")
-
-    # Find "Save as Template" in context menu
-    find_tmpl = interceptor("find", "Save as Template", wait_after=500)
-    tmpl_entries = _extract_refs(find_tmpl)
-    if not tmpl_entries:
-        print("  ✗ 'Save as Template' not found in context menu")
+    # Step 3: click "Save as template" in the submenu
+    val3 = _js_eval(_CLICK_SAVE_AS_TEMPLATE_JS)
+    if '"error"' in val3:
+        print(f"  ✗ 'Save as template' not in submenu: {val3[:60]}")
         _print_manual("template", template_name)
         return
+    time.sleep(1.5)
 
-    interceptor("click",_ref(tmpl_entries[0]), wait_after=1500)
-    screenshot("template-dialog")
+    # Step 4: use a11y tree to type into the name field and save
+    tree_data = interceptor("state", wait_after=500)
+    tree_text = tree_data.get("elementTree", "")
 
-    # Find the template name input
-    find_input = interceptor("find", "Template", "--role", "textbox", wait_after=500)
-    input_entries = _extract_refs(find_input)
-    if not input_entries:
-        find_input = interceptor("find", "Name", "--role", "textbox", wait_after=500)
-        input_entries = _extract_refs(find_input)
+    # Find the template name input ref
+    input_ref = None
+    save_ref = None
+    for line in tree_text.split("\n"):
+        if "Enter template name" in line or ("textbox" in line and "Template name" in line):
+            import re
+            m = re.search(r'\[e(\d+)\]', line)
+            if m:
+                input_ref = f"e{m.group(1)}"
+        if '"Save Template"' in line or "'Save Template'" in line:
+            import re
+            m = re.search(r'\[e(\d+)\]', line)
+            if m:
+                save_ref = f"e{m.group(1)}"
 
-    if input_entries:
-        input_ref = _ref(input_entries[0])
-        interceptor("click",input_ref, wait_after=300)
-        interceptor("keys", "Control+a", wait_after=200)
-        interceptor("type", input_ref, template_name, wait_after=500)
+    if input_ref:
+        interceptor("click", input_ref, wait_after=200)
+        interceptor("keys", "Control+a", wait_after=100)
+        interceptor("type", input_ref, template_name, wait_after=300)
+    else:
+        print("  ⚠ Name input ref not found — template name may be blank")
 
-    # Click Save / Create
-    find_save = interceptor("find", "Save", "--role", "button", wait_after=300)
-    save_entries = _extract_refs(find_save)
-    if not save_entries:
-        find_save = interceptor("find", "Create", "--role", "button", wait_after=300)
-        save_entries = _extract_refs(find_save)
+    if save_ref:
+        interceptor("click", save_ref, wait_after=1000)
+    else:
+        interceptor("keys", "Enter", wait_after=1000)
 
-    if save_entries:
-        interceptor("click",_ref(save_entries[0]), wait_after=1000)
-        print(f"  ✓ Template '{template_name}' save attempted")
+    # Verify dialog closed
+    check = _js_eval(r"""
+(function(){
+    var inputs=Array.from(document.querySelectorAll('input')).filter(function(i){
+        return(i.placeholder||'').indexOf('Enter template name')>=0;
+    });
+    return JSON.stringify({dialogGone:inputs.length===0});
+})()
+""")
+    if '"dialogGone":true' in check:
+        print(f"  ✓ Template '{template_name}' saved")
         screenshot("template-saved")
     else:
-        print("  ✗ Save button not found — complete the dialog manually")
-        _print_manual("template", template_name)
+        print(f"  ⚠ Dialog may still be open — verify in Chrome")
+        screenshot("template-verify")
 
 
 # ---------------------------------------------------------------------------
