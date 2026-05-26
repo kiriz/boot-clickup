@@ -416,29 +416,45 @@ def step_template(page: Page, ctx: RunContext) -> None:
     ctx.screenshot(page, "template", "after-nav")
     print(f"  ▸ current URL: {page.url}", flush=True)
 
-    # Wait for any visible "Personal Ops" — header title loads faster than sidebar
-    # Try header selectors first (list title in view header), then sidebar
-    found = first_visible(
+    # ClickUp's Angular SPA can take 15-30s after networkidle to fully hydrate.
+    # Wait for the loading spinner to disappear (two animated divs in center screen).
+    try:
+        page.wait_for_selector(
+            '[class*="loading"], [class*="spinner"], [class*="skeleton"]',
+            state="hidden", timeout=30_000,
+        )
+    except PlaywrightTimeoutError:
+        pass  # no spinner found or it stayed — press on
+
+    # If the sidebar is in icon-only (collapsed) mode, expand it so list names appear.
+    expand_btn = first_visible(
         page,
         [
-            # View header title (most reliable — always present when on a list page)
-            'cu-list-title, [class*="list-title"], [class*="view-title"] >> text=Personal Ops',
-            '[class*="breadcrumb"] >> text=Personal Ops',
-            # Generic text match anywhere in the page
-            'text=Personal Ops',
+            'button[aria-label*="expand" i][class*="sidebar" i]',
+            'button[aria-label*="open sidebar" i]',
+            '[class*="sidebar-toggle"], [class*="nav-toggle"]',
         ],
-        timeout=20_000,
+        timeout=3_000,
     )
+    if expand_btn:
+        try:
+            expand_btn.click()
+            page.wait_for_timeout(1_000)
+        except PlaywrightError:
+            pass
+
+    # Now wait for "Personal Ops" to appear anywhere on the page (header or sidebar).
+    # Use a plain text locator — most reliable across ClickUp layout variants.
+    found = first_visible(page, ['text=Personal Ops'], timeout=30_000)
     if found is None:
-        print("  ✗ 'Personal Ops' never appeared — check screenshots/template-after-nav.png", flush=True)
+        ctx.screenshot(page, "template", "not-found")
+        print("  ✗ 'Personal Ops' never appeared — check screenshots/template-not-found.png", flush=True)
         _print_manual_template()
         return
 
-    # Try right-clicking the sidebar item first; fall back to the page header title.
-    # Header title is often easier to hit than the sidebar entry.
+    # Right-click the sidebar item preferentially; fall back to any matching element.
     sidebar_item = _find_sidebar_item(page, "Personal Ops")
     if sidebar_item is None:
-        # Fall back: grab any visible element whose full text is "Personal Ops"
         sidebar_item = page.get_by_text("Personal Ops", exact=True).first
 
     try:
@@ -455,54 +471,110 @@ def step_template(page: Page, ctx: RunContext) -> None:
             state="visible", timeout=8_000
         )
     except PlaywrightTimeoutError:
-        print("  ✗ context menu didn't open", flush=True)
+        ctx.screenshot(page, "template", "no-menu")
+        print("  ✗ context menu didn't open — check screenshots/template-no-menu.png", flush=True)
         _print_manual_template()
         return
 
-    # Hover Templates → CDK submenu animates in
-    try:
-        overlay.get_by_text("Templates", exact=False).first.hover()
-        page.wait_for_timeout(500)
-    except PlaywrightError as exc:
-        print(f"  ⚠ Templates hover issue: {exc}", flush=True)
+    # Screenshot the open context menu so we know what items are present
+    ctx.screenshot(page, "template", "context-menu")
 
+    # Log all visible menu item texts for debugging
     try:
-        overlay.get_by_text(re.compile(r"^save as template$", re.I)).first.click()
+        items = overlay.locator('[class*="menu-item"], [role="menuitem"], li').all()
+        item_texts = [i.inner_text().strip() for i in items if i.is_visible()]
+        print(f"  ▸ menu items: {item_texts[:15]}", flush=True)
+    except PlaywrightError:
+        pass
+
+    # Hover Templates → CDK submenu animates in
+    templates_item = first_visible(
+        page,
+        [
+            '.cdk-overlay-container >> text=/templates/i',
+            '.cdk-overlay-container [class*="menu-item"]:has-text("Templates")',
+        ],
+        timeout=5_000,
+    )
+    if templates_item:
+        try:
+            templates_item.hover()
+            page.wait_for_timeout(800)
+            ctx.screenshot(page, "template", "after-hover-templates")
+        except PlaywrightError as exc:
+            print(f"  ⚠ Templates hover issue: {exc}", flush=True)
+    else:
+        print("  ⚠ 'Templates' item not found in menu — trying direct save-as-template", flush=True)
+
+    # Search anywhere in page for "save as template" — flexible match, not anchored
+    save_loc = first_visible(
+        page,
+        [
+            '.cdk-overlay-container >> text=/save as template/i',
+            '.cdk-overlay-container >> text=/save list as template/i',
+            'text=/save as template/i',
+        ],
+        timeout=5_000,
+    )
+    if save_loc is None:
+        ctx.screenshot(page, "template", "no-save-as-template")
+        print("  ✗ 'Save as Template' not found — check screenshots/template-no-save-as-template.png", flush=True)
+        _print_manual_template()
+        return
+    try:
+        save_loc.click()
     except PlaywrightError as exc:
         print(f"  ✗ 'Save as Template' click failed: {exc}", flush=True)
         _print_manual_template()
         return
 
-    # Dialog appears — type the template name
+    # Dialog: "Save as new List template" — fill name then click Save Template button
+    ctx.screenshot(page, "template", "dialog-open")
+
+    # Find and fill the template name input (any visible text input in the dialog)
     name_input = first_visible(
         page,
         [
             'input[placeholder*="template" i]',
             'input[placeholder*="name" i]',
-            '.cdk-overlay-container input[type="text"]',
+            '[role="dialog"] input[type="text"]',
+            'input[type="text"]',
         ],
         timeout=8_000,
     )
-    if name_input is None:
-        print("  ⚠ name field not found — template may save unnamed", flush=True)
-    else:
+    if name_input is not None:
         try:
-            name_input.fill(TEMPLATE_NAME)
+            name_input.fill(TEMPLATE_NAME)  # fill() replaces existing text
+            print(f"  ▸ filled name: {TEMPLATE_NAME}", flush=True)
         except PlaywrightError as exc:
             print(f"  ⚠ fill failed: {exc}", flush=True)
+    else:
+        print("  ⚠ name input not found — proceeding with existing text", flush=True)
 
-    try:
+    # Click the "Save Template" button explicitly — Enter doesn't submit this dialog
+    save_btn = first_visible(
+        page,
+        [
+            'button:has-text("Save Template")',
+            'button:has-text("Save template")',
+            '[role="dialog"] button[class*="primary"]',
+            '[role="dialog"] button >> text=/save/i',
+        ],
+        timeout=5_000,
+    )
+    if save_btn:
+        try:
+            save_btn.click()
+            print("  ▸ clicked Save Template button", flush=True)
+        except PlaywrightError as exc:
+            print(f"  ⚠ Save Template button click failed: {exc}", flush=True)
+    else:
+        # Last resort — press Enter
         page.keyboard.press("Enter")
-    except PlaywrightError:
-        pass
 
-    # Confirm dialog cleared
+    # Confirm dialog dismissed
     try:
-        page.wait_for_selector(
-            'input[placeholder*="template" i]',
-            state="hidden",
-            timeout=8_000,
-        )
+        page.wait_for_selector('button:has-text("Save Template")', state="hidden", timeout=8_000)
         print(f"  ✓ Template '{TEMPLATE_NAME}' saved", flush=True)
         ctx.screenshot(page, "template", "saved")
     except PlaywrightTimeoutError:
