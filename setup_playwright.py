@@ -412,23 +412,40 @@ def step_template(page: Page, ctx: RunContext) -> None:
         _print_manual_template()
         return
 
-    try:
-        page.wait_for_selector("text=Personal Ops", timeout=15_000)
-    except PlaywrightTimeoutError:
-        print("  ✗ 'Personal Ops' never appeared", flush=True)
+    # Diagnostic screenshot right after navigation so we can see what loaded
+    ctx.screenshot(page, "template", "after-nav")
+    print(f"  ▸ current URL: {page.url}", flush=True)
+
+    # Wait for any visible "Personal Ops" — header title loads faster than sidebar
+    # Try header selectors first (list title in view header), then sidebar
+    found = first_visible(
+        page,
+        [
+            # View header title (most reliable — always present when on a list page)
+            'cu-list-title, [class*="list-title"], [class*="view-title"] >> text=Personal Ops',
+            '[class*="breadcrumb"] >> text=Personal Ops',
+            # Generic text match anywhere in the page
+            'text=Personal Ops',
+        ],
+        timeout=20_000,
+    )
+    if found is None:
+        print("  ✗ 'Personal Ops' never appeared — check screenshots/template-after-nav.png", flush=True)
         _print_manual_template()
         return
 
+    # Try right-clicking the sidebar item first; fall back to the page header title.
+    # Header title is often easier to hit than the sidebar entry.
     sidebar_item = _find_sidebar_item(page, "Personal Ops")
     if sidebar_item is None:
-        print("  ✗ Personal Ops sidebar entry not found", flush=True)
-        _print_manual_template()
-        return
+        # Fall back: grab any visible element whose full text is "Personal Ops"
+        sidebar_item = page.get_by_text("Personal Ops", exact=True).first
 
     try:
         sidebar_item.click(button="right")
     except PlaywrightError as exc:
         print(f"  ✗ right-click failed: {exc}", flush=True)
+        ctx.screenshot(page, "template", "rightclick-fail")
         _print_manual_template()
         return
 
@@ -808,6 +825,36 @@ STEPS: dict[str, Callable[[Page, RunContext], None]] = {
 }
 
 
+def _connect_cdp(cdp_url: str, slow_mo_ms: int = 100) -> tuple[Any, BrowserContext, Page]:
+    """
+    Connect to an already-running Chrome via CDP (preferred mode).
+
+    Start Chrome with the remote debug port once:
+      /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\
+          --remote-debugging-port=9222 &
+
+    Or add to your shell alias:
+      alias chrome='open -a "Google Chrome" --args --remote-debugging-port=9222'
+
+    Then run: python setup_playwright.py --cdp-url http://localhost:9222
+    """
+    pw = sync_playwright().start()
+    try:
+        browser = pw.chromium.connect_over_cdp(cdp_url, slow_mo=slow_mo_ms)
+    except PlaywrightError as exc:
+        pw.stop()
+        raise RuntimeError(
+            f"Could not connect to Chrome at {cdp_url}.\n"
+            "  Start Chrome with: open -a 'Google Chrome' --args --remote-debugging-port=9222\n"
+            f"  Underlying error: {exc}"
+        ) from exc
+
+    context = browser.contexts[0] if browser.contexts else browser.new_context()
+    context.set_default_timeout(DEFAULT_TIMEOUT_MS)
+    page = context.pages[0] if context.pages else context.new_page()
+    return pw, context, page
+
+
 def _launch_context(
     profile_path: Path,
     headless: bool = False,
@@ -837,6 +884,34 @@ def _launch_context(
     context.set_default_timeout(DEFAULT_TIMEOUT_MS)
     page = context.pages[0] if context.pages else context.new_page()
     return pw, context, page
+
+
+def _ensure_logged_in(page: Page, base_url: str) -> bool:
+    """
+    If the browser landed on /login, pause and let the user log in manually.
+    Returns True when logged in, False if the user skips.
+    """
+    if "/login" not in page.url:
+        return True
+    print(
+        "\n  ⚠ Not logged in to ClickUp (landed on /login).\n"
+        "  Log in in the browser window that just opened, then press Enter here.",
+        flush=True,
+    )
+    print("  Press Enter when logged in (or 's' to skip): ", end="", flush=True)
+    try:
+        resp = input().strip().lower()
+    except EOFError:
+        resp = ""
+    if resp == "s":
+        return False
+    # Verify login succeeded
+    try:
+        page.wait_for_url(lambda u: "/login" not in u, timeout=30_000)
+    except PlaywrightTimeoutError:
+        print("  ✗ Still on login page — aborting", flush=True)
+        return False
+    return True
 
 
 def main() -> None:
@@ -873,6 +948,17 @@ def main() -> None:
         "--slow-mo", type=int, default=100,
         help="Slow-mo ms between actions (gives Angular CDK time to render).",
     )
+    parser.add_argument(
+        "--cdp-url",
+        metavar="URL",
+        default=None,
+        help=(
+            "Connect to an already-running Chrome via CDP instead of launching "
+            "a new one (recommended — keeps your ClickUp session). "
+            "Start Chrome first: open -a 'Google Chrome' --args --remote-debugging-port=9222 "
+            "then pass: --cdp-url http://localhost:9222"
+        ),
+    )
     args = parser.parse_args()
 
     # Load config (always — even dry-run needs it for URL preview)
@@ -896,19 +982,27 @@ def main() -> None:
         print("\nsetup_playwright.py (dry-run) complete.")
         return
 
-    print(f"Profile: {args.profile}")
+    if args.cdp_url:
+        print(f"CDP:     {args.cdp_url}")
+    else:
+        print(f"Profile: {args.profile}")
     print()
 
-    pw, browser_ctx, page = _launch_context(
-        profile_path=args.profile,
-        headless=args.headless,
-        slow_mo_ms=args.slow_mo,
-    )
+    if args.cdp_url:
+        pw, browser_ctx, page = _connect_cdp(args.cdp_url, slow_mo_ms=args.slow_mo)
+    else:
+        pw, browser_ctx, page = _launch_context(
+            profile_path=args.profile,
+            headless=args.headless,
+            slow_mo_ms=args.slow_mo,
+        )
 
     try:
-        # Park on the workspace root once so subsequent navigations don't fight
-        # a blank tab.
+        # Park on the workspace root; also surfaces login redirects early.
         goto(page, config.base_url, label="ClickUp root")
+        if not _ensure_logged_in(page, config.base_url):
+            print("✗ Not logged in — exiting.", flush=True)
+            sys.exit(1)
         for name in steps_to_run:
             try:
                 STEPS[name](page, ctx)
